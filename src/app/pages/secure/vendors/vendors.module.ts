@@ -7,7 +7,6 @@ import { IonicModule } from '@ionic/angular';
 import { VendorsPageRoutingModule } from './vendors-routing.module';
 
 import { VendorsPage } from './vendors.page';
-import { VendorFormComponent } from './vendor-form/vendor-form.component';
 
 @NgModule({
   imports: [

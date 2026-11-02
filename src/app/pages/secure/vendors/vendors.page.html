@@ -8,9 +8,10 @@
   <ion-title class="ion-text-start">Vendors</ion-title>
 
   <ion-buttons slot="end">
-    <ion-button fill="clear" (click)="addVendor()">
-  <ion-icon name="add"></ion-icon>
-</ion-button>
+    <ion-button class="assignment-mode-button" (click)="toggleAssignmentMode()">
+      <ion-icon [name]="assignmentMode ? 'checkmark-outline' : 'create-outline'"></ion-icon>
+      {{ assignmentMode ? 'Done' : 'Edit' }}
+    </ion-button>
   </ion-buttons>
 
 </ion-toolbar>
@@ -25,6 +26,10 @@
 </ion-header>
 
 <ion-content>
+  <div class="store-assignment-heading" *ngIf="selectedStoreName">
+    <div><strong>{{ selectedStoreName }}</strong><span>Choose which vendors are available at this store.</span></div>
+    <span class="assignment-count">{{ mappedVendors.length }} assigned</span>
+  </div>
   <div *ngIf="loadError" class="ion-text-center ion-padding" role="alert">
     <p>{{ loadError }}</p>
     <ion-button size="small" (click)="loadVendors()">Retry</ion-button>
@@ -51,7 +56,6 @@
       class="vendor-card"
       *ngFor="let vendor of filteredVendors; let i = index"
       [style.border-bottom]="'4px solid ' + getAccentColor(i)"
-      (click)="editVendor(vendor)"
     >
 
       <!-- TOP ROW -->
@@ -68,6 +72,11 @@
             </div>
           </div>
         </div>
+
+        <label class="assignment-toggle" *ngIf="assignmentMode" (click)="$event.stopPropagation()" [attr.aria-label]="(isMapped(vendor) ? 'Unmap ' : 'Map ') + vendor.vendor_name">
+          <input type="checkbox" [checked]="isMapped(vendor)" [disabled]="savingAssignments.size > 0 || loading" (change)="toggleStoreMapping(vendor, $event)" />
+          <span class="assignment-checkmark"><ion-spinner *ngIf="savingAssignments.has(vendorId(vendor))" name="crescent"></ion-spinner><ion-icon *ngIf="!savingAssignments.has(vendorId(vendor))" name="checkmark-outline"></ion-icon></span>
+        </label>
 
         <!-- <div class="type"
              [class.purchase]="vendor.type === 'purchase'"

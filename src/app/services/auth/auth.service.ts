@@ -192,6 +192,183 @@ private get merchantApiUrl(): string {
     }
   }
 
+  async updatePchMerchantEmployee(idOrCode: string | number, storeId: string, data: any): Promise<any> {
+  const token = this.getToken();
+  if (!this.isMerchantSession() || !token || !idOrCode || !storeId) throw new Error('Sign in with a merchant account and select a store before updating an employee.');
+  const payload: any = {
+    username: data.username,
+    email: data.email,
+    first_name: data.first_name,
+    last_name: data.last_name,
+    phone: data.phone
+  };
+  if (data.login_pin !== undefined && data.login_pin !== '') payload.login_pin = data.login_pin;
+  const res = await CapacitorHttp.request({
+    method: 'PUT',
+    url: this.merchantApiUrl + '/merchant/employees/' + encodeURIComponent(String(idOrCode)),
+    headers: { Authorization: 'Bearer ' + token, Accept: 'application/json', 'Content-Type': 'application/json' },
+    params: { storeId },
+    data: payload
+  });
+  const body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+  if (res.status < 200 || res.status >= 300 || body?.success === false) {
+    const details = body?.message || body?.error?.message || body?.errors || body?.error;
+    throw new Error(typeof details === 'string' ? details : details ? JSON.stringify(details) : `Unable to update employee (HTTP ${res.status}).`);
+  }
+  return body;
+}
+
+async getPchStoreVendorMappings(storeId: string): Promise<any[]> {
+  const token = this.getToken();
+  if (!storeId || !token) throw new Error('Sign in and select a store to load vendor assignments.');
+  const res = await CapacitorHttp.request({
+    method: 'GET', url: this.merchantApiUrl + '/store-vendor-mappings',
+    headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' },
+    params: { store_id: storeId }
+  });
+  const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+  if (res.status < 200 || res.status >= 300 || data?.success === false) throw new Error(data?.message || 'Unable to load store vendor assignments.');
+  const mappings: any[] = [];
+  const findMappings = (value: any, depth = 0): any[] => {
+    if (Array.isArray(value)) return value;
+    if (!value || typeof value !== 'object' || depth > 5) return [];
+    for (const key of ['mappings', 'storeVendorMappings', 'store_vendor_mappings', 'vendorMappings', 'vendor_mappings', 'vendors', 'items', 'results']) {
+      if (Array.isArray(value[key])) return value[key];
+    }
+    return findMappings(value.data || value.result, depth + 1);
+  };
+  mappings.push(...findMappings(data));
+  return mappings.filter((mapping: any) => {
+    const flag = mapping.assigned ?? mapping.is_mapped ?? mapping.isMapped;
+    const status = mapping.mapping_status ?? mapping.mappingStatus;
+    return (flag === undefined || flag === null || flag === true || flag === 1 || /^(true|1|yes)$/i.test(String(flag))) &&
+      (status === undefined || status === null || !String(status).trim() || String(status).toUpperCase() === 'ACTIVE');
+  }).map((mapping: any) => {
+    const nested = mapping.vendor || mapping.vendorDetails || mapping.vendor_details || mapping.vendorInfo || mapping.vendor_info;
+    const vendor = nested && typeof nested === 'object' ? nested : mapping;
+    const rawVendorId = mapping.vendorId || mapping.vendor_id || mapping.vendorUUID || mapping.vendor_uuid || (typeof nested === 'string' ? nested : '') || vendor.id || vendor._id || '';
+    const rawMappingId = mapping.mappingId || mapping.mapping_id || mapping.mapping_uuid || mapping.mappingUUID || mapping.storeVendorMappingId || mapping.store_vendor_mapping_id || mapping.assignmentId || mapping.assignment_id || mapping.id || mapping._id || '';
+    return { vendorId: String(typeof rawVendorId === 'object' ? rawVendorId.id || rawVendorId._id || '' : rawVendorId), mappingId: String(rawMappingId) };
+  }).filter((item: any) => item.vendorId);
+}
+
+async mapPchVendorToStore(storeId: string, vendorId: string): Promise<any> {
+  const token = this.getToken();
+  if (!storeId || !vendorId || !token) throw new Error('Sign in, select a store, and choose a vendor.');
+  const res = await CapacitorHttp.request({
+    method: 'POST', url: this.merchantApiUrl + '/store-vendor-mappings',
+    headers: { Authorization: 'Bearer ' + token, Accept: 'application/json', 'Content-Type': 'application/json' },
+    data: { store_id: storeId, vendor_id: vendorId }
+  });
+  const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+  if (res.status < 200 || res.status >= 300 || data?.success === false) throw new Error(data?.message || 'Unable to map vendor to this store.');
+  return data;
+}
+
+async unmapPchVendorFromStore(storeId: string, vendorId: string, mappingId?: string): Promise<void> {
+  const token = this.getToken();
+  if (!storeId || !vendorId || !token) throw new Error('Sign in and select a store first.');
+  const res = await CapacitorHttp.request({
+    method: 'DELETE',
+    url: this.merchantApiUrl + '/store-vendor-mappings' + (mappingId ? '/' + encodeURIComponent(mappingId) : ''),
+    headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' },
+    ...(mappingId ? {} : { params: { store_id: storeId, vendor_id: vendorId } })
+  });
+  const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+  if (res.status < 200 || res.status >= 300 || data?.success === false) throw new Error(data?.message || 'Unable to unmap vendor from this store.');
+}
+
+async getPchMerchantEmployees(merchantId: string): Promise<any[]> {
+  const token = this.getToken();
+  if (!merchantId || !token) throw new Error('Sign in to load merchant employees.');
+  const res = await CapacitorHttp.request({
+    method: 'GET',
+    url: this.merchantApiUrl + '/merchants/' + encodeURIComponent(merchantId) + '/employees',
+    headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' }
+  });
+  const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+  const employees = data?.employees || data?.data?.employees || data?.data;
+  if (res.status < 200 || res.status >= 300 || data?.success === false || !Array.isArray(employees)) {
+    throw new Error(data?.message || 'Unable to load merchant employees.');
+  }
+  return employees.map((employee: any) => ({
+    ...employee,
+    id: employee.employeeId || employee.employee_id || employee.id,
+    first_name: employee.firstName || employee.first_name || '',
+    last_name: employee.lastName || employee.last_name || '',
+    roles: employee.roleId ? [employee.roleId] : (employee.roles || []),
+    meta: { ...(employee.meta || {}), user_phone: employee.phone || employee.phoneNumber || '', emp_login_pin: employee.loginPin || employee.login_pin || '' }
+  }));
+}
+
+async getPchMerchantRoles(merchantId: string): Promise<any[]> {
+  const token = this.getToken();
+  if (!merchantId || !token) throw new Error('Sign in to load employee roles.');
+  const res = await CapacitorHttp.request({
+    method: 'GET',
+    url: this.merchantApiUrl + '/merchants/' + encodeURIComponent(merchantId) + '/role-templates/available',
+    headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' }
+  });
+  const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+  if (res.status < 200 || res.status >= 300 || data?.success === false) throw new Error(data?.message || 'Unable to load employee roles.');
+  const root = data?.data || data;
+  const source = Array.isArray(root) ? root : (root?.roleTemplates || root?.roles || root?.items || root?.data?.roleTemplates || []);
+  if (!Array.isArray(source)) return [];
+  const selected = source.filter((row: any) => row?.selected === true || row?.isSelected === true);
+  const pchRoles = selected.length
+    ? selected
+    : (Array.isArray(root?.roleTemplates) ? root.roleTemplates.filter((row: any) => row?.sourceRoleTemplateId || row?.roleTemplateId) : []);
+  return pchRoles.map((row: any) => {
+    const role = row.roleTemplate || row.template || row;
+    // The assignment endpoint expects the merchant-scoped roleTemplateId.
+    // sourceRoleTemplateId identifies the shared source template and is not assignable.
+    const key = String(row.roleTemplateId || role.roleTemplateId || role.id || role._id || row.id || row.sourceRoleTemplateId || '');
+    const sourceKey = String(row.sourceRoleTemplateId || role.sourceRoleTemplateId || '');
+    const name = String(role.name || role.roleName || role.templateName || row.name || '').trim();
+    return key && name ? { key, sourceKey, name } : null;
+  }).filter(Boolean);
+}
+
+async getPchStoreEmployeeAssignments(merchantId: string, storeId: string): Promise<any[]> {
+  const token = this.getToken();
+  if (!merchantId || !storeId || !token) throw new Error('Sign in and select a store first.');
+  const res = await CapacitorHttp.request({
+    method: 'GET',
+    url: this.merchantApiUrl + '/merchants/' + encodeURIComponent(merchantId) + '/stores/' + encodeURIComponent(storeId) + '/employees',
+    headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' }
+  });
+  const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+  const employees = data?.employees || data?.data?.employees || data?.data;
+  if (res.status < 200 || res.status >= 300 || data?.success === false || !Array.isArray(employees)) {
+    throw new Error(data?.message || 'Unable to load store employee assignments.');
+  }
+  return employees.map((employee: any) => ({
+    employeeId: String(employee.employeeId || employee.employee_id || employee.id || ''),
+    roleTemplateId: employee.roleTemplateId || employee.role_template_id || employee.roleId || employee.role_id || '',
+    loginPin: employee.loginPin || employee.login_pin || employee.pin || ''
+  })).filter((employee: any) => employee.employeeId);
+}
+
+async savePchStoreEmployeeAssignments(merchantId: string, storeId: string, employees: any[]): Promise<void> {
+  const token = this.getToken();
+  if (!merchantId || !storeId || !token) throw new Error('Sign in and select a store first.');
+  const payload = { employees: employees.map(employee => ({
+    employeeId: String(employee.employeeId), employee_id: String(employee.employeeId),
+    ...(employee.roleTemplateId ? { roleTemplateId: String(employee.roleTemplateId), role_template_id: String(employee.roleTemplateId) } : {}),
+    ...(employee.loginPin ? { loginPin: String(employee.loginPin), login_pin: String(employee.loginPin) } : {})
+  })) };
+  const res = await CapacitorHttp.request({
+    method: 'PUT',
+    url: this.merchantApiUrl + '/merchants/' + encodeURIComponent(merchantId) + '/stores/' + encodeURIComponent(storeId) + '/employees',
+    headers: { Authorization: 'Bearer ' + token, Accept: 'application/json', 'Content-Type': 'application/json' },
+    data: payload
+  });
+  const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+  if (res.status < 200 || res.status >= 300 || data?.success === false) {
+    throw new Error(data?.message || 'Unable to update employee assignments.');
+  }
+}
+
 async getPchOrderStatusCounts(storeId: string): Promise<Record<string, number>> {
     if (!storeId) throw new Error('Select a store to load order counts.');
     const baseUrl = !Capacitor.isNativePlatform() && !environment.production
@@ -1256,17 +1433,66 @@ async getUserById(id: number): Promise<any> {
 }
 
 // Coupons
-// async getCouponById(id: number) {
-//   const res = await CapacitorHttp.request({
-//     method: 'GET',
-//     url: `${this.wpBase}/wp-json/wc/v3/coupons/${id}`,
-//     headers: this.getAuthHeaders()
-//   });
-
-//   return res.data;
-// }
+private async requestPchCoupon(method: 'GET' | 'PUT' | 'DELETE', id: string | number, data?: any): Promise<any> {
+  const token = this.getToken();
+  let merchantId = '', storeId = '';
+  try {
+    merchantId = JSON.parse(localStorage.getItem('merchant_data') || 'null')?.id || '';
+    storeId = JSON.parse(localStorage.getItem('selected_store') || 'null')?.id || '';
+  } catch {}
+  if (!token || !merchantId || !storeId || !id) throw new Error('Sign in and select a valid coupon and store first.');
+  let payload: any;
+  if (method === 'PUT') {
+    payload = { merchantId, storeId };
+    const fields = ['code', 'amount', 'discountType', 'description', 'dateExpires', 'individualUse',
+      'productIds', 'excludedProductIds', 'usageLimit', 'usageLimitPerUser', 'limitUsageToXItems',
+      'freeShipping', 'productCategories', 'excludedProductCategories', 'excludeSaleItems',
+      'minimumAmount', 'maximumAmount', 'emailRestrictions', 'requiredProductIds'];
+    fields.forEach(key => { if (data?.[key] !== undefined) payload[key] = data[key]; });
+  }
+  const res = await CapacitorHttp.request({
+    method, url: this.merchantApiUrl + '/coupons/' + encodeURIComponent(String(id)),
+    headers: { Authorization: 'Bearer ' + token, Accept: 'application/json', 'Content-Type': 'application/json' },
+    ...(payload ? { data: payload } : {})
+  });
+  let body: any;
+  try { body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data; }
+  catch { throw new Error('Coupon API returned an unexpected response (HTTP ' + res.status + '). Please check the API server.'); }
+  if (res.status < 200 || res.status >= 300 || body?.success !== true || !body?.coupon?.id) {
+    throw new Error(Array.isArray(body?.message) ? body.message.join(', ') : (body?.message || 'Unable to load, update or delete coupon.'));
+  }
+  return body;
+}
 
 async createCoupon(data: any) {
+  if (this.isMerchantSession()) {
+    const token = this.getToken();
+    let merchantId = '', storeId = '';
+    try {
+      merchantId = JSON.parse(localStorage.getItem('merchant_data') || 'null')?.id || '';
+      storeId = JSON.parse(localStorage.getItem('selected_store') || 'null')?.id || '';
+    } catch {}
+    if (!token || !merchantId || !storeId) throw new Error('Sign in and select a store on the dashboard first.');
+    const fields = ['code', 'amount', 'discountType', 'description', 'dateExpires', 'individualUse',
+      'productIds', 'excludedProductIds', 'usageLimit', 'usageLimitPerUser', 'limitUsageToXItems',
+      'freeShipping', 'productCategories', 'excludedProductCategories', 'excludeSaleItems',
+      'minimumAmount', 'maximumAmount', 'emailRestrictions', 'requiredProductIds'];
+    const payload: any = { merchantId, storeId };
+    fields.forEach(key => { if (data[key] !== undefined) payload[key] = data[key]; });
+    const res = await CapacitorHttp.request({
+      method: 'POST', url: this.merchantApiUrl + '/coupons',
+      headers: { Authorization: 'Bearer ' + token, Accept: 'application/json', 'Content-Type': 'application/json' },
+      data: payload
+    });
+    let body: any;
+    try { body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data; }
+    catch { throw new Error('Coupon API returned an unexpected response (HTTP ' + res.status + '). Please check the API server.'); }
+    if (res.status < 200 || res.status >= 300 || body?.success !== true || !body?.coupon?.id) {
+      throw new Error(Array.isArray(body?.message) ? body.message.join(', ') : (body?.message || 'Unable to create coupon.'));
+    }
+    return body;
+  }
+
 
   const res = await CapacitorHttp.request({
     method: 'POST',
@@ -1286,28 +1512,9 @@ async createCoupon(data: any) {
 
 
 
-// async updateCoupon(id: number, data: any) {
-//   const res = await CapacitorHttp.request({
-//     method: 'PUT',
-//     url: `${this.wpBase}/wp-json/wc/v3/coupons/${id}`,
-//     headers: this.getAuthHeaders(),
-//     data
-//   });
 
-//   return res.data;
-// }
-
-// async deleteCoupon(id: number) {
-//   const res = await CapacitorHttp.request({
-//     method: 'DELETE',
-//     url: `${this.wpBase}/wp-json/wc/v3/coupons/${id}`,
-//     headers: this.getAuthHeaders(),
-//     params: { force: "1" }
-//   });
-
-//   return res.data;
-// }
-async getCouponById(id: number) {
+async getCouponById(id: string | number) {
+  if (this.isMerchantSession()) return this.requestPchCoupon('GET', id);
 
   const token = localStorage.getItem('wc_token');
 
@@ -1324,7 +1531,8 @@ async getCouponById(id: number) {
     ? JSON.parse(res.data)
     : res.data;
 }
-async updateCoupon(id: number, data: any) {
+async updateCoupon(id: string | number, data: any) {
+  if (this.isMerchantSession()) return this.requestPchCoupon('PUT', id, data);
 
   const token = localStorage.getItem('wc_token');
 
@@ -1343,7 +1551,8 @@ async updateCoupon(id: number, data: any) {
     ? JSON.parse(res.data)
     : res.data;
 }
-async deleteCoupon(id: number) {
+async deleteCoupon(id: string | number) {
+  if (this.isMerchantSession()) return this.requestPchCoupon('DELETE', id);
 
   const token = localStorage.getItem('wc_token');
 

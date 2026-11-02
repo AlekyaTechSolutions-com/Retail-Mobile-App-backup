@@ -258,34 +258,13 @@
 </ion-card>
 
 
-<!-- DATE MODAL -->
-<ion-modal
-  [isOpen]="showDatePicker"
-  (didDismiss)="showDatePicker=false"
-  class="calendar-modal">
-
-  <ng-template>
-    <div class="calendar-container">
-
-      <ion-datetime
-        presentation="date"
-        [min]="today"
-        [value]="coupon.expireDate"
-        (ionChange)="setDate($event)">
-      </ion-datetime>
-
-    </div>
-  </ng-template>
-
-</ion-modal>
-
 <!-- CREATE BUTTON (BOTTOM) -->
 <div class="update-wrapper">
   <ion-button
     expand="block"
     fill="solid"
     class="update-bottom-btn"
-    (click)="saveCoupon()">
+    [disabled]="isSaving" (click)="saveCoupon()">
 
     Create Coupon
 

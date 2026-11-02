@@ -1,48 +1,48 @@
 <ion-header class="coupons-header">
   <ion-toolbar>
-
+ 
     <!-- Top row -->
     <div class="header-row">
       <ion-buttons slot="start">
         <ion-back-button defaultHref="/tabs/home" text=""></ion-back-button>
       </ion-buttons>
-
+ 
       <ion-title>Coupons</ion-title>
-
+ 
       <ion-buttons slot="end">
         <ion-button fill="clear" (click)="openAddCoupon()">
   <ion-icon name="add-outline"></ion-icon>
 </ion-button>
       </ion-buttons>
     </div>
-
+ 
     <!-- Search bar -->
     <div class="search-wrapper">
   <ion-icon name="search-outline"></ion-icon>
-
+ 
   <input
     type="text"
     placeholder="Search all Coupons"
     [(ngModel)]="searchTerm"
     (input)="filterCoupons()"
   />
-
+ 
 </div>
-
+ 
   </ion-toolbar>
 </ion-header>
-
+ 
 <ion-content class="coupon-content">
   <div *ngIf="loadError" class="ion-text-center ion-padding" role="alert">
     <p>{{ loadError }}</p>
     <ion-button size="small" (click)="loadCoupons()">Retry</ion-button>
   </div>
-
+ 
   <!-- LOADING STATE -->
   <div *ngIf="loading && filteredCoupons.length === 0" class="loader-wrapper">
     <ion-spinner name="crescent"></ion-spinner>
   </div>
-
+ 
   <!-- EMPTY STATE -->
   <div
     *ngIf="!loading && !loadError && filteredCoupons.length === 0"
@@ -52,21 +52,21 @@
     <h3>No coupons found</h3>
     <p>Try changing your search.</p>
   </div>
-
-
+ 
+ 
 <div
   class="coupon-card"
   *ngFor="let coupon of filteredCoupons"
   (click)="editCoupon(coupon)"
 >
   <div class="card-top">
-
+ 
     <div class="icon-box">
       <img src="assets/icons/coupons.svg" class="coupon-icon" />
     </div>
-
+ 
     <div class="card-info">
-
+ 
       <!-- Row 1 -->
       <div class="row-between">
         <div class="code">
@@ -75,18 +75,18 @@
       ? (coupon.code | slice:0:10) + '...'
       : coupon.code }}
 </div>
-
+ 
         <div class="usage">
           {{ coupon.usage_count || 0 }}/
-          {{ coupon.usage_limit === 0 ? '∞' : coupon.usage_limit }}
+          {{ (!coupon.usage_limit || coupon.usage_limit == 0) ? '∞' : coupon.usage_limit }}
         </div>
       </div>
-
+ 
       <!-- Row 2 -->
       <div class="row-between">
         <div class="amount">Amount: $ {{ coupon.amount | number:'1.2-2' }}</div>
-        <div class="expiry-badge" *ngIf="coupon.date_expires">
-          Expiry: {{ coupon.date_expires | date:'dd MMM yyyy' }}
+        <div class="expiry-badge" [class.expired-badge]="isExpired(coupon)">
+          {{ isExpired(coupon) ? 'Expired' : (coupon.date_expires ? ('Expiry: ' + (coupon.date_expires | date:'dd-MM-yyyy')) : 'Expiry: dd-mm-yyyy') }}
         </div>
       </div>
     </div>
@@ -98,3 +98,5 @@
   </div>
 </div>
 </ion-content>
+ 
+ 

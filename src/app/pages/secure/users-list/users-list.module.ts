@@ -5,7 +5,6 @@ import { IonicModule } from '@ionic/angular';
 
 import { UsersListPageRoutingModule } from './users-list-routing.module';
 import { UsersListPage } from './users-list.page';
-import { AddUserComponent } from './modals/add-user/add-user.component';
 
 @NgModule({
   declarations: [
@@ -15,8 +14,7 @@ import { AddUserComponent } from './modals/add-user/add-user.component';
     CommonModule,
     FormsModule,
     IonicModule,
-    UsersListPageRoutingModule,
-    AddUserComponent   // ✅ ADD HERE
+    UsersListPageRoutingModule
   ]
 })
 export class UsersListPageModule {}

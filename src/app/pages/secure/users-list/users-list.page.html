@@ -3,87 +3,54 @@
     <ion-buttons slot="start">
       <ion-back-button defaultHref="/tabs/home" text=""></ion-back-button>
     </ion-buttons>
-
     <ion-title>Employees</ion-title>
-
     <ion-buttons slot="end">
-      <ion-button (click)="openAddEmployee()">
-        <ion-icon name="add-outline"></ion-icon>
+      <ion-button class="assignment-mode-button" (click)="toggleAssignmentMode()">
+        <ion-icon [name]="assignmentMode ? 'checkmark-outline' : 'create-outline'"></ion-icon>
+        {{ assignmentMode ? 'Done' : 'Edit' }}
       </ion-button>
     </ion-buttons>
   </ion-toolbar>
-
-
-  <!-- Search -->
   <div class="search-wrapper">
     <ion-icon name="search-outline"></ion-icon>
-    <input
-      type="text"
-      placeholder="Search by name"
-      (input)="onSearch($event)"
-    />
+    <input type="text" placeholder="Search by name" (input)="onSearch($event)" />
   </div>
 </ion-header>
+
 <ion-content class="employees-content">
-  <div *ngIf="loadError" class="ion-text-center ion-padding" role="alert">
-    <p>{{ loadError }}</p>
-    <ion-button size="small" (click)="loadUsers()">Retry</ion-button>
+  <div class="store-assignment-heading" *ngIf="selectedStoreName">
+    <div><strong>{{ selectedStoreName }}</strong><span>Choose which employees can access this store.</span></div>
+    <span class="assignment-count">{{ assignedEmployeeCount }} assigned</span>
   </div>
 
-  <!-- LOADING -->
-<div *ngIf="loading && filteredUsers.length === 0" class="loader-wrapper">
-  <ion-spinner name="crescent"></ion-spinner>
-</div>
+  <div *ngIf="loadError" class="ion-text-center ion-padding" role="alert">
+    <p>{{ loadError }}</p><ion-button size="small" (click)="loadUsers()">Retry</ion-button>
+  </div>
+  <div *ngIf="loading && filteredUsers.length === 0" class="loader-wrapper"><ion-spinner name="crescent"></ion-spinner></div>
 
-  <ion-list>
-
-    <ion-item
-      lines="none"
-      *ngFor="let user of filteredUsers; let i = index"
-      (click)="editEmployee(user)"
-    >
-
-      <div class="employee-card"
-           [ngClass]="'card-color-' + (i % 5)">
-
-        <div class="role-label">
-          • {{ user.roleName || getRoleLabel(user.roles) }}
-        </div>
-
+  <ion-list class="employee-assignment-list" [class.assignment-mode]="assignmentMode">
+    <ion-item lines="none" *ngFor="let user of filteredUsers; let i = index" (click)="!assignmentMode && editEmployee(user)">
+      <div class="employee-card" [ngClass]="'card-color-' + (i % 5)">
+        <div class="role-label"><span class="role-color-dot" aria-hidden="true"></span>{{ getEmployeeRoleLabel(user) }}</div>
         <div class="card-content">
-
-          <div class="avatar" [ngClass]="'avatar-' + (i % 5)">
-            <img src="assets/icons/solar_user-broken.svg" alt="user" class="avatar-icon" />
-          </div>
-
+          <div class="avatar" [ngClass]="'avatar-' + (i % 5)"><img src="assets/icons/solar_user-broken.svg" alt="" class="avatar-icon" /></div>
           <div class="details">
-            <div class="name">
-              {{ user.first_name }} {{ user.last_name }}
-            </div>
-            <div class="login-id">
-
-              Login Pin: 
-               <span class="pin-number">{{ user.meta?.emp_login_pin || 'Not Set' }}</span>
-            </div>
+            <div class="name">{{ user.first_name }} {{ user.last_name }}</div>
+            <div class="login-id">{{ user.email || user.username || 'Employee' }}</div>
           </div>
-
+          <label class="assignment-toggle" *ngIf="assignmentMode" (click)="$event.stopPropagation()" [attr.aria-label]="(isAssigned(user) ? 'Unmap ' : 'Map ') + user.first_name + ' ' + user.last_name">
+            <input type="checkbox" [checked]="isAssigned(user)" [disabled]="savingAssignments.size > 0 || loading" (change)="toggleStoreAssignment(user, $event)" />
+            <span class="assignment-checkmark"><ion-spinner *ngIf="savingAssignments.has(employeeId(user))" name="crescent"></ion-spinner><ion-icon *ngIf="!savingAssignments.has(employeeId(user))" name="checkmark-outline"></ion-icon></span>
+          </label>
         </div>
-
       </div>
-
     </ion-item>
-
   </ion-list>
 
-  <!-- Empty State -->
-  <div
-    class="no-employees"
-    *ngIf="!loading && !loadError && filteredUsers.length === 0 && !editingUserId"
-  >
-    <ion-icon name="people-outline"></ion-icon>
-    <h3>No Employees Found</h3>
-    <p>Try changing the search.</p>
+  <div class="no-employees" *ngIf="!loading && !loadError && filteredUsers.length === 0">
+    <ion-icon name="people-outline"></ion-icon><h3>No Employees Found</h3><p>Try changing the search.</p>
   </div>
+</ion-content>
 
 <!-- EDIT EMPLOYEE FULL SCREEN -->
 <div class="edit-overlay" *ngIf="editingUserId">
@@ -285,8 +252,7 @@
 
     <!-- Login PIN -->
      <ion-label position="stacked">Login PIN</ion-label>
-      <div class="form-field"
-  [class.invalid]="pinTouched && editedUser.emp_login_pin && !isValidPin(editedUser.emp_login_pin)">
+      <div class="form-field" [class.invalid]="pinTouched && editedUser.emp_login_pin && !isValidPin(editedUser.emp_login_pin)">
   <input
     type="tel"
     placeholder="Enter 6-digit PIN"
@@ -297,16 +263,9 @@
     class="custom-input"
   />
 </div>
-
-      <p class="error-text"
-        *ngIf="pinTouched && editedUser.emp_login_pin && !isValidPin(editedUser.emp_login_pin)">
+      <p class="error-text" *ngIf="pinTouched && editedUser.emp_login_pin && !isValidPin(editedUser.emp_login_pin)">
         PIN must be exactly 6 digits
       </p>
-
-      <p class="error-text" *ngIf="pinError">
-        {{ pinError }}
-      </p>
-
 
     <!-- Save Button -->
     <ion-button
@@ -327,15 +286,6 @@
       Save Changes
     </ion-button>
 
-    <!-- Delete Button -->
-    <ion-button
-      expand="block"
-      color="danger"
-      fill="outline"
-      class="delete-btn"
-      (click)="deleteUser(editingUserId)">
-      Delete Employee
-    </ion-button>
       <!-- <ion-button
         expand="block"
         fill="clear"

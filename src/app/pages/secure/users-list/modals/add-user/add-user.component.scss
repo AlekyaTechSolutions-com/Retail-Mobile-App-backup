@@ -9,6 +9,26 @@
   }
 }
 
+/* PCH Employees form cards, adapted to a single-column mobile layout. */
+.employee-form-content { --background: #f6f8fb; --padding-top: 14px; --padding-bottom: 24px; }
+.employee-form-shell { padding: 0 14px 20px; }
+.employee-form-card, .edit-popup { padding: 18px 16px; margin: 0 0 14px; border: 1px solid #e5eaf1; border-radius: 14px; background: #fff; box-shadow: 0 3px 12px rgba(26, 48, 78, .06); }
+.employee-form-card-heading { display: flex; align-items: center; gap: 12px; padding-bottom: 15px; margin-bottom: 8px; border-bottom: 1px solid #edf0f5; }
+.employee-form-card-heading h2 { margin: 0; color: #17233d; font-size: 16px; font-weight: 700; }
+.employee-form-card-heading p { margin: 4px 0 0; color: #7b8da8; font-size: 12px; }
+.employee-section-icon { display: grid; place-items: center; flex: 0 0 38px; height: 38px; border-radius: 10px; background: #eef3ff; color: #315b91; font-size: 20px; }
+.employee-section-icon.account { background: #f1efff; color: #5946b5; }
+.employee-section-icon.work { background: #eaf7f1; color: #28815f; }
+.employee-subsection-heading { margin-top: 22px; }
+.employee-form-card ion-label[position="stacked"] { width: auto; margin: 13px 0 6px; padding: 0; color: #34445b; font-size: 13px; }
+.employee-form-card .form-field { width: 100%; min-height: 46px; margin: 0; border: 1px solid #dce4ef; border-radius: 8px; background: #fff; }
+.employee-form-card .custom-input { min-height: 28px; padding: 0 2px; font-size: 14px; }
+.employee-form-card .error-text { width: 100%; margin: 5px 0 0; padding: 0; font-size: 12px; }
+.employee-form-actions { display: grid; grid-template-columns: 1fr 1.5fr; gap: 10px; margin-top: 18px; }
+.employee-form-actions ion-button { height: 46px; margin: 0; --border-radius: 9px; font-size: 15px; font-weight: 600; }
+.employee-form-actions .cancel-employee-btn { --color: #34445b; --border-color: #ccd6e3; }
+.employee-form-actions .create-user-btn { height: 46px; margin: 0; --border-radius: 9px; font-size: 15px; }
+
 ion-content {
   --background: #f5f7fa;
 }

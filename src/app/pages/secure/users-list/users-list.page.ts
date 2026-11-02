@@ -17,8 +17,12 @@ export class UsersListPage {
 
   users: any[] = [];
   filteredUsers: any[] = [];
+  assignedEmployees: any[] = [];
+  selectedStoreName = '';
+  savingAssignments = new Set<string>();
+  assignmentMode = false;
 
-  editingUserId: number | null = null;
+  editingUserId: string | number | null = null;
   editedUser: any = {};
   originalUser: any = {};
   isChanged = false;
@@ -115,10 +119,7 @@ async ngOnInit() {
 
     const state = history.state;
 
-    if (state?.autoOpenCreate) {
-      this.openAddEmployee();
-      history.replaceState({}, '');
-    }
+    history.replaceState({}, '');
 
     await this.loadUsers();
     if (!this.authService.isMerchantSession()) this.customRoles = await this.authService.getCustomRoles();
@@ -151,16 +152,19 @@ async ngOnInit() {
 editEmployee(user: any) {
 
   this.checktoken();  
-  this.editingUserId = user.id;
+  this.editingUserId = this.employeeId(user);
+  const storeAssignment = this.assignedEmployees.find(item => String(item.employeeId) === this.employeeId(user));
+  const assignedRoleId = String(storeAssignment?.roleTemplateId || user.roleTemplateId || user.roleId || user.roles?.[0] || '');
+  const matchingRole = this.customRoles.find(role => String(role.key) === assignedRoleId || String(role.sourceKey) === assignedRoleId);
 
   this.editedUser = {
     username: user.username,
     email: user.email,
     first_name: user.first_name,
     last_name: user.last_name,
-    role: user.roles?.[0] || '',
+    role: matchingRole?.key || assignedRoleId,
     phone: user.meta?.user_phone || '',
-    emp_login_pin: user.meta?.emp_login_pin || ''
+    emp_login_pin: storeAssignment?.loginPin || ''
   };
 
   this.originalUser = { ...this.editedUser };
@@ -169,6 +173,41 @@ editEmployee(user: any) {
   this.isUsernameLocked = !!user.username;
 
 }
+
+  toggleAssignmentMode() { this.assignmentMode = !this.assignmentMode; }
+
+  get assignedEmployeeCount(): number { return this.assignedEmployees.length; }
+
+  employeeId(user: any): string { return String(user?.employeeId || user?.employee_id || user?.id || ''); }
+
+  isAssigned(user: any): boolean {
+    return this.assignedEmployees.some(item => String(item.employeeId) === this.employeeId(user));
+  }
+
+  async toggleStoreAssignment(user: any, event: Event) {
+    const input = event.target as HTMLInputElement;
+    const id = this.employeeId(user);
+    if (!id || this.savingAssignments.has(id)) { input.checked = this.isAssigned(user); return; }
+    const existing = this.assignedEmployees.find(item => String(item.employeeId) === id);
+    const next = input.checked
+      ? [...this.assignedEmployees, { employeeId: id, roleTemplateId: this.customRoles[0]?.key || '' }]
+      : this.assignedEmployees.filter(item => String(item.employeeId) !== id);
+    this.savingAssignments = new Set(this.savingAssignments).add(id);
+    try {
+      const merchantId = JSON.parse(localStorage.getItem('merchant_data') || 'null')?.id || '';
+      const storeId = JSON.parse(localStorage.getItem('selected_store') || 'null')?.id || '';
+      await this.authService.savePchStoreEmployeeAssignments(merchantId, storeId, next);
+      this.assignedEmployees = next;
+      const toast = await this.toastCtrl.create({ message: input.checked ? 'Employee mapped to this store' : 'Employee unmapped from this store', duration: 1600, position: 'bottom', color: 'success' });
+      await toast.present();
+    } catch (error: any) {
+      input.checked = !!existing;
+      const toast = await this.toastCtrl.create({ message: error?.message || 'Unable to update store assignment', duration: 2500, position: 'bottom', color: 'danger' });
+      await toast.present();
+    } finally {
+      const pending = new Set(this.savingAssignments); pending.delete(id); this.savingAssignments = pending;
+    }
+  }
   
   checkChanges() {
     this.isChanged =
@@ -176,54 +215,12 @@ editEmployee(user: any) {
       JSON.stringify(this.editedUser);
   }
   
-async deleteUser(id: number) {
-
-  const alert = await this.alertCtrl.create({
-    header: 'Delete Employee',
-    message: 'Are you sure you want to delete this employee?',
-    buttons: [
-      {
-        text: 'Cancel',
-        role: 'cancel'
-      },
-      {
-        text: 'Delete',
-        role: 'destructive',
-        handler: async () => {
-
-          try {
-
-            // delete employee
-            await this.authService.deleteEmployee(id);
-
-            // close edit screen
-            this.cancelEdit();
-
-            // reload employee list
-            await this.loadUsers();
-
-            // show success message
-            const toast = await this.toastCtrl.create({
-              message: 'Employee deleted successfully',
-              duration: 2000,
-              position: 'bottom',
-              color: 'success'
-            });
-
-            await toast.present();
-
-          } catch (error) {
-            console.error('Delete error:', error);
-          }
-
-        }
-      }
-    ]
-  });
-
-  await alert.present();
-}
   async saveChanges() {
+
+    if (this.editedUser.emp_login_pin && !this.isValidPin(this.editedUser.emp_login_pin)) {
+      this.pinTouched = true;
+      return;
+    }
 
     if (
   this.containsEmoji(this.editedUser.username) ||
@@ -244,19 +241,27 @@ async deleteUser(id: number) {
       email: this.editedUser.email,
       first_name: this.editedUser.first_name,
       last_name: this.editedUser.last_name,
-      role: this.editedUser.role,
-      user_phone: this.editedUser.phone,
-      emp_login_pin: this.editedUser.emp_login_pin
+      phone: this.editedUser.phone,
+      login_pin: this.editedUser.emp_login_pin
     };
-
-      
-
-      const response = await this.authService.updateEmployee(this.editingUserId!, payload);
-      console.log('UPDATE EMPLOYEE RESPONSE 👉', response);
-
-      if (response?.success || (response && response.id)) { // Sometimes update returns the object directly
+      const storeId = JSON.parse(localStorage.getItem('selected_store') || 'null')?.id || '';
+      const response = await this.authService.updatePchMerchantEmployee(this.editingUserId!, storeId, payload);
+      if (this.isAssigned({ id: this.editingUserId }) && this.editedUser.role) {
+        const employeeId = String(this.editingUserId);
+        const nextAssignments = this.assignedEmployees.map(item => String(item.employeeId) === employeeId
+          ? {
+              ...item,
+              roleTemplateId: this.editedUser.role,
+              ...(this.editedUser.emp_login_pin ? { loginPin: String(this.editedUser.emp_login_pin) } : {})
+            }
+          : item);
+        await this.authService.savePchStoreEmployeeAssignments(
+          JSON.parse(localStorage.getItem('merchant_data') || 'null')?.id || '', storeId, nextAssignments);
+        this.assignedEmployees = nextAssignments;
+      }
+      if (response?.success || response?.employee || response?.id) {
         this.editingUserId = null;
-        this.loadUsers();
+        await this.loadUsers();
       } else {
         throw { error: response || { message: 'An unknown error occurred' } };
       }
@@ -269,16 +274,15 @@ async deleteUser(id: number) {
         e?.error?.message ||
         e?.error?.data?.message ||
         e?.error?.error ||
+        e?.message ||
         JSON.stringify(e?.error || e);
 
       console.log('FINAL MESSAGE 👉', message);
 
       if (typeof message === 'string' && message.toLowerCase().includes('pin')) {
-        this.pinError = ''; // Clear so no inline red text is shown
         this.showAlert('Error', message);
       } else {
         // If it's another error, don't blindly assume it's a PIN error.
-        this.pinError = ''; 
         let errorMsg = typeof message === 'string' ? message : 'An error occurred while updating the employee';
         // Clean up stringified objects if we just get {}
         if (errorMsg === '{}') errorMsg = 'An error occurred while updating the employee';
@@ -352,13 +356,26 @@ async deleteUser(id: number) {
     this.users = [];
     this.filteredUsers = [];
     try {
-      const users = await this.authService.getPchEmployees(merchantId, storeId);
+      const [users, assignments, roles] = await Promise.all([
+        this.authService.getPchMerchantEmployees(merchantId),
+        this.authService.getPchStoreEmployeeAssignments(merchantId, storeId),
+        this.authService.getPchMerchantRoles(merchantId)
+      ]);
       if (requestId !== this.employeeRequestId) return;
       this.users = users;
+      this.assignedEmployees = assignments;
+      try { this.selectedStoreName = JSON.parse(localStorage.getItem('selected_store') || 'null')?.name || JSON.parse(localStorage.getItem('selected_store') || 'null')?.store_name || 'Selected store'; } catch { this.selectedStoreName = 'Selected store'; }
       this.filterEmployees();
-      const roles = new Map<string, string>();
-      users.forEach(user => { if (user.roleId && user.roleName) roles.set(user.roleId, user.roleName); });
-      this.customRoles = Array.from(roles, ([key, name]) => ({ key, name }));
+      // The PCH employee screen offers only role templates currently used for
+      // this store. The merchant-wide available-role endpoint can return more,
+      // so scope its results to this store's assignment role IDs.
+      const storeRoleIds = new Set(assignments
+        .map((assignment: any) => String(assignment.roleTemplateId || ''))
+        .filter(Boolean));
+      const storeRoles = roles.filter((role: any) =>
+        storeRoleIds.has(String(role.key)) || (role.sourceKey && storeRoleIds.has(String(role.sourceKey)))
+      );
+      this.customRoles = storeRoles;
     } catch (error: any) {
       if (requestId === this.employeeRequestId) this.loadError = error?.message || 'Unable to load employees. Please try again.';
     } finally {
@@ -370,11 +387,20 @@ async deleteUser(id: number) {
     if (!Array.isArray(roles) || roles.length === 0) return '';
     return roles[0].replace('_', ' ');
   }
+
+  getEmployeeRoleLabel(user: any): string {
+    const assignment = this.assignedEmployees.find(item => String(item.employeeId) === this.employeeId(user));
+    const roleId = String(assignment?.roleTemplateId || user?.roleTemplateId || user?.roleId || user?.role_id || user?.roles?.[0] || '');
+    const roleName = user?.roleName || user?.role_name || user?.role?.name || user?.roles?.[0]?.name;
+    if (roleName) return String(roleName);
+    const mappedRole = this.customRoles.find(role => String(role.key) === roleId || String(role.sourceKey) === roleId || String(role.id) === roleId);
+    if (mappedRole?.name) return String(mappedRole.name);
+    return roleId ? roleId.replace(/[_-]+/g, ' ') : 'Unassigned';
+  }
   
   emailTouched = false;
 phoneTouched = false;
 pinTouched = false;
-pinError = '';
 
 isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -388,18 +414,17 @@ isValidPin(pin: string): boolean {
   return /^[0-9]{6}$/.test(pin);
 }
 
+limitPinLength(event: any) {
+  const value = event.target.value || '';
+  this.editedUser.emp_login_pin = value.replace(/\D/g, '').slice(0, 6);
+  event.target.value = this.editedUser.emp_login_pin;
+}
+
 limitPhoneLength(event: any) {
   const value = event.target.value || '';
   this.editedUser.phone = value.replace(/\D/g, '').slice(0, 10);
 }
 
-limitPinLength(event: any) {
-  const value = event.target.value || '';
-  this.editedUser.emp_login_pin = value.replace(/\D/g, '').slice(0, 6);
-
-  // clear backend error on typing
-  this.pinError = '';
-}
  async checktoken() {
     
   const token = localStorage.getItem('user_data') ? JSON.parse(localStorage.getItem('user_data')!).token : null;
