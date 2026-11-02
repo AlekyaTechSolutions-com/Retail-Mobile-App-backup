@@ -104,6 +104,30 @@ ion-header.dark-toolbar {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
 }
 
+.store-assignment-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:14px 16px 8px; padding:14px; border:1px solid #e4eaf2; border-radius:12px; background:#fff; }
+.assignment-mode-button { --background:transparent; --background-hover:transparent; --background-activated:transparent; --background-focused:transparent; --color:#fff; --border-radius:9px; --padding-start:12px; --padding-end:12px; min-height:36px; margin-inline-end:8px; font-size:14px; font-weight:600; text-transform:none; }
+.assignment-mode-button ion-icon { margin-inline-end:6px; font-size:16px; }
+.employee-assignment-list ion-item { cursor:pointer; }
+.store-assignment-heading > div { display:flex; flex-direction:column; gap:4px; min-width:0; }
+.store-assignment-heading strong { color:#20334d; font-size:14px; }
+.store-assignment-heading span { color:#71829a; font-size:12px; }
+.store-assignment-heading .assignment-count { flex:0 0 auto; padding:6px 9px; border-radius:20px; background:#edf4ff; color:#315b91; font-weight:600; }
+.employee-assignment-list { padding-top:2px; background:transparent; }
+.employee-assignment-list ion-item { --background:transparent; }
+.employee-assignment-list .employee-card { padding:16px 14px; border:1px solid #edf0f4; border-bottom-width:3px; border-radius:14px; }
+.employee-assignment-list .card-content { gap:12px; }
+.employee-assignment-list .avatar { flex:0 0 48px; width:48px; height:48px; margin-right:0; }
+.employee-assignment-list .details { flex:1; min-width:0; }
+.employee-assignment-list .details .name { max-width:100%; font-size:16px; }
+.employee-assignment-list .details .login-id { overflow:hidden; max-width:100%; color:#74839a; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+.assignment-toggle { position:relative; display:grid; place-items:center; flex:0 0 42px; width:42px; height:42px; cursor:pointer; }
+.assignment-toggle input { position:absolute; width:1px; height:1px; opacity:0; }
+.assignment-checkmark { display:grid; place-items:center; width:28px; height:28px; border:2px solid #c6d0dd; border-radius:8px; background:#fff; color:transparent; font-size:18px; }
+.assignment-toggle input:checked + .assignment-checkmark { border-color:#315b91; background:#315b91; color:#fff; }
+.assignment-toggle input:focus-visible + .assignment-checkmark { outline:3px solid #bdd4fa; }
+.assignment-toggle input:disabled + .assignment-checkmark { opacity:.55; }
+.assignment-checkmark ion-spinner { width:18px; height:18px; color:#536981; }
+
 /* Bottom colored border */
 .card-color-0 { border-bottom: 4px solid #d1c876; }
 .card-color-1 { border-bottom: 4px solid #de667c; }
@@ -117,10 +141,17 @@ ion-header.dark-toolbar {
   position: absolute;
   top: 20px;
   right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 14px;
   font-weight: 500;
   text-transform: capitalize;
 }
+
+.employee-assignment-list.assignment-mode .role-label { right:68px; max-width:calc(100% - 132px); white-space:nowrap; }
+
+.role-color-dot { width:7px; height:7px; flex:0 0 7px; border-radius:50%; background:currentColor; }
 
 /* Role text color matches border */
 .card-color-0 .role-label { color: #d1c876; }
@@ -223,9 +254,26 @@ ion-item-sliding {
 /* FORM CONTAINER */
 
 .edit-popup {
-  padding: 4px 16px 40px;   /* 👈 reduce from 20px → 8px */
+  padding: 18px 16px 28px;
+  margin: 14px;
+  border: 1px solid #e5eaf1;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(26, 48, 78, .06);
 
 }
+
+.employee-form-card-heading { display:flex; align-items:center; gap:12px; padding-bottom:15px; margin:0 0 8px; border-bottom:1px solid #edf0f5; }
+.employee-form-card-heading h2 { margin:0; color:#17233d; font-size:16px; font-weight:700; }
+.employee-form-card-heading p { margin:4px 0 0; color:#7b8da8; font-size:12px; }
+.employee-section-icon { display:grid; place-items:center; flex:0 0 38px; height:38px; border-radius:10px; background:#eef3ff; color:#315b91; font-size:20px; }
+.employee-section-icon.account { background:#f1efff; color:#5946b5; }
+.employee-section-icon.work { background:#eaf7f1; color:#28815f; }
+.employee-subsection-heading { margin-top:24px; }
+.edit-popup > ion-label[position="stacked"] { display:block; margin:13px 0 6px; padding:0; color:#34445b; font-size:13px; }
+.edit-popup .form-field { min-height:46px; margin:0; border:1px solid #dce4ef; border-radius:8px; background:#fff; }
+.edit-popup .custom-input { min-height:28px; padding:0 2px; font-size:14px; }
+.edit-popup .error-text { margin:5px 0 0; padding:0; font-size:12px; }
 
 /* FORM FIELD */
 
@@ -522,6 +570,12 @@ ion-input,
   margin-right: 20px; /* spacing from right edge */
 }
 
+:host-context(.ios) .dark-toolbar ion-buttons[slot="end"] ion-button.assignment-mode-button {
+  background: transparent;
+  --background: transparent;
+  --background-activated: transparent;
+}
+
 /* Remove extra padding */
 :host-context(.ios) .dark-toolbar ion-buttons[slot="end"] ion-button::part(native) {
   padding: 0 !important;
@@ -551,6 +605,12 @@ ion-input,
   border-radius: 50%;
   background: rgba(255,255,255,0.15);
   padding: 0 !important;
+}
+
+:host-context(.ios) .dark-toolbar ion-buttons[slot="end"] ion-button.assignment-mode-button {
+  background: transparent;
+  --background: transparent;
+  --background-activated: transparent;
 }
  
 /* iOS ONLY - Edit screen back button circle */

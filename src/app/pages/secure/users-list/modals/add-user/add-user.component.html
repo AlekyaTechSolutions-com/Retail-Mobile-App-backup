@@ -12,7 +12,10 @@
   </ion-toolbar>
 </ion-header>
 
-<ion-content class="ion-padding">
+<ion-content class="employee-form-content">
+  <div class="employee-form-shell">
+    <section class="employee-form-card">
+      <div class="employee-form-card-heading"><span class="employee-section-icon"><ion-icon name="person-outline"></ion-icon></span><div><h2>Personal Information</h2><p>Enter the basic details of the employee.</p></div></div>
 
   <!-- Username -->
    <!-- Username -->
@@ -190,6 +193,9 @@
   <p class="error-text" *ngIf="phoneTouched && user.phone && !isValidPhone(user.phone)">
     Please enter a valid 10-digit phone number
   </p>
+    </section>
+    <section class="employee-form-card">
+      <div class="employee-form-card-heading"><span class="employee-section-icon account"><ion-icon name="settings-outline"></ion-icon></span><div><h2>Account Settings</h2><p>Set login and access details.</p></div></div>
   <!-- Login PIN -->
    <!-- Login PIN -->
 <ion-label position="stacked">Login PIN</ion-label>
@@ -223,6 +229,8 @@
 </p>
 
   <!-- Create User Button -->
+    </section>
+  <div class="employee-form-actions"><ion-button fill="outline" class="cancel-employee-btn" (click)="close()">Cancel</ion-button>
   <ion-button
   expand="block"
   class="create-user-btn"
@@ -236,7 +244,7 @@
   (user.emp_login_pin && !isValidPin(user.emp_login_pin))
 "
   (click)="submit()">
-  Create User
+  Save Employee
 </ion-button>
-
+  </div></div>
 </ion-content>

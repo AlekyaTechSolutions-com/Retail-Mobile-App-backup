@@ -100,6 +100,21 @@ ion-content {
   transform: scale(0.99);
 }
 
+.assignment-mode-button { --background:transparent; --background-hover:transparent; --background-activated:transparent; --background-focused:transparent; --color:#fff; --border-radius:9px; --padding-start:12px; --padding-end:12px; min-height:36px; margin-inline-end:4px; font-size:14px; font-weight:600; text-transform:none; }
+.assignment-mode-button ion-icon { margin-inline-end:6px; font-size:16px; }
+.store-assignment-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:14px 16px 0; padding:14px; border:1px solid #e4eaf2; border-radius:12px; background:#fff; }
+.store-assignment-heading > div { display:flex; flex-direction:column; gap:4px; min-width:0; }
+.store-assignment-heading strong { color:#20334d; font-size:14px; }
+.store-assignment-heading span { color:#71829a; font-size:12px; }
+.store-assignment-heading .assignment-count { flex:0 0 auto; padding:6px 9px; border-radius:20px; background:#edf4ff; color:#315b91; font-weight:600; }
+.assignment-toggle { position:relative; display:grid; place-items:center; flex:0 0 42px; width:42px; height:42px; cursor:pointer; }
+.assignment-toggle input { position:absolute; width:1px; height:1px; opacity:0; }
+.assignment-checkmark { display:grid; place-items:center; width:28px; height:28px; border:2px solid #c6d0dd; border-radius:8px; background:#fff; color:transparent; font-size:18px; }
+.assignment-toggle input:checked + .assignment-checkmark { border-color:#315b91; background:#315b91; color:#fff; }
+.assignment-toggle input:focus-visible + .assignment-checkmark { outline:3px solid #bdd4fa; }
+.assignment-toggle input:disabled + .assignment-checkmark { opacity:.55; }
+.assignment-checkmark ion-spinner { width:18px; height:18px; color:#536981; }
+
 /* bottom accent */
 .vendor-card.purchase {
   border-bottom-color: #2bb3a3;
@@ -359,6 +374,12 @@ ion-content {
   margin-right: 10px; /* spacing from right edge */
 }
 
+:host-context(.ios) .vendor-header ion-buttons[slot="end"] ion-button.assignment-mode-button {
+  background: transparent;
+  --background: transparent;
+  --background-activated: transparent;
+}
+
 /* Remove extra padding */
 :host-context(.ios) .vendor-header ion-buttons[slot="end"] ion-button::part(native) {
   padding: 0 !important;
@@ -375,4 +396,3 @@ ion-content {
   margin-left: 12px;
   margin-right: 12px;
 }
-

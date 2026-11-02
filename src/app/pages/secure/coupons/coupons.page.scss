@@ -232,6 +232,12 @@ ion-item-option{
 
   font-size: 12px;
   font-weight: 500;
+
+  &.expired-badge {
+    background: #fde8e8;
+    color: #e02424;
+    font-weight: 600;
+  }
 }
 
 /* AMOUNT */

@@ -1,8 +1,6 @@
 import { Component } from '@angular/core';
 import { ActionSheetController } from '@ionic/angular';
 import { Router } from '@angular/router';
-import { ModalController } from '@ionic/angular';
-import { AddUserComponent } from '../pages/secure/users-list/modals/add-user/add-user.component';
 import { NavController } from '@ionic/angular';
 import { Platform, IonRouterOutlet } from '@ionic/angular';
 import { ViewChild } from '@angular/core';
@@ -29,7 +27,6 @@ toggle() {
   private navCtrl: NavController,
   private actionSheetController: ActionSheetController,
   private router: Router,
-  private modalCtrl: ModalController,
   private platform: Platform
 ) {
 
@@ -99,19 +96,6 @@ toggle() {
     });
     await actionSheet.present();
   }
-  async goToAddEmployee() {
-    this.isOpen = false;
-
-    const modal = await this.modalCtrl.create({
-      component: AddUserComponent,
-      componentProps: {
-        userRole: 'employee'
-      }
-    });
-
-    await modal.present();
-  }
-
   goToAddProduct() {
     this.isOpen = false;
     this.router.navigate(['products/add']);

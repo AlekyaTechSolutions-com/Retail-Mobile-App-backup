@@ -6,8 +6,8 @@ import { AuthService } from 'src/app/services/auth/auth.service';
 import { Router, NavigationEnd } from '@angular/router';
 import { filter } from 'rxjs/operators';
 import { Subscription } from 'rxjs';
-
-
+ 
+ 
 @Component({
     selector: 'app-coupons',
     standalone: true,
@@ -26,7 +26,7 @@ filteredCoupons: any[] = [];
   private loadingContext = '';
   showForm = false;
   editingCoupon: any = null;
-
+ 
   form = {
     code: '',
     discount_type: 'percent',
@@ -36,16 +36,16 @@ filteredCoupons: any[] = [];
     usage_limit: '',
     description: ''
   };
-
+ 
   formSubmitted = false;
-
+ 
   constructor(
   private auth: AuthService,
   private alertCtrl: AlertController,
   private router: Router,
   private cdr: ChangeDetectorRef
 ) {}
-
+ 
   ngOnInit() {
     void this.loadCoupons();
     this.routerSub = this.router.events.pipe(
@@ -57,7 +57,7 @@ filteredCoupons: any[] = [];
       }
     });
   }
-
+ 
   ngOnDestroy() {
     if (this.routerSub) {
       this.routerSub.unsubscribe();
@@ -102,22 +102,22 @@ async loadCoupons() {
 }
 ionViewWillEnter() {
   const state = history.state;
-
+ 
   if (state?.autoOpenCreate) {
     this.openCreate();
     history.replaceState({}, '');
   }
-
+ 
   console.log("Refreshing coupons..."); // 🔥 debug
   this.loadCoupons();
 }
-
+ 
   openCreate() {
     this.resetForm();
     this.showForm = true;
   }
-  
-
+ 
+ 
   openEdit(coupon: any) {
     this.editingCoupon = coupon;
     this.form = {
@@ -131,25 +131,25 @@ ionViewWillEnter() {
     };
     this.showForm = true;
   }
-
+ 
   async saveCoupon() {
     this.formSubmitted = true;
-
+ 
     if (!this.isFormValid()) {
       return;
     }
-
+ 
     if (this.editingCoupon) {
       await this.auth.updateCoupon(this.editingCoupon.id, this.form);
     } else {
       await this.auth.createCoupon(this.form);
     }
-
+ 
     this.showForm = false;
     this.resetForm();
     this.loadCoupons();
   }
-
+ 
   isFormValid(): boolean {
     return (
       this.form.code.trim() !== '' &&
@@ -157,10 +157,10 @@ ionViewWillEnter() {
       Number(this.form.amount) > 0
     );
   }
-
+ 
   hasError(field: string): boolean {
     if (!this.formSubmitted) return false;
-
+ 
     switch (field) {
       case 'code':
         return !this.form.code.trim();
@@ -170,8 +170,8 @@ ionViewWillEnter() {
         return false;
     }
   }
-
-
+ 
+ 
   async deleteCoupon(coupon: any) {
     const alert = await this.alertCtrl.create({
       header: 'Delete Coupon?',
@@ -188,10 +188,10 @@ ionViewWillEnter() {
         }
       ]
     });
-
+ 
     alert.present();
   }
-
+ 
   resetForm() {
     this.formSubmitted = false;
     this.editingCoupon = null;
@@ -205,18 +205,37 @@ ionViewWillEnter() {
       description: ''
     };
   }
- filterCoupons() {
-  const term = this.searchTerm.toLowerCase().trim();
-
-  if (!term) {
-    this.filteredCoupons = [...this.coupons];
-    return;
+   filterCoupons() {
+    const term = this.searchTerm.toLowerCase().trim();
+ 
+    let list = this.coupons;
+    if (term) {
+      list = list.filter(coupon =>
+        coupon.code?.toLowerCase().includes(term) ||
+        coupon.description?.toLowerCase().includes(term)
+      );
+    }
+ 
+    this.filteredCoupons = [...list].sort((a, b) => {
+      const aExp = this.isExpired(a) ? 1 : 0;
+      const bExp = this.isExpired(b) ? 1 : 0;
+      return aExp - bExp;
+    });
   }
-
-  this.filteredCoupons = this.coupons.filter(coupon =>
-    coupon.code?.toLowerCase().includes(term) ||
-    coupon.description?.toLowerCase().includes(term)
-  );
-
+ 
+  isExpired(coupon: any): boolean {
+    const raw = coupon?.date_expires || coupon?.dateExpires || coupon?.expireDate || coupon?.expiry_date;
+    if (!raw) return false;
+    try {
+      const dateStr = typeof raw === 'string'
+        ? (raw.includes('T') ? raw.split('T')[0] : raw.substring(0, 10))
+        : new Date(raw).toISOString().split('T')[0];
+      if (!dateStr || dateStr.length < 10) return false;
+      const expiry = new Date(dateStr + 'T23:59:59');
+      return expiry.getTime() < Date.now();
+    } catch {
+      return false;
+    }
+  }
 }
-}
+ 
