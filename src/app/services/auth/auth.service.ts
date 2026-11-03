@@ -604,6 +604,92 @@ async getPartialOrders(page: number, search: string = '', status: string = '')
     ? JSON.parse(res.data)
     : res.data;
 }
+async getPchProductOptions(merchantId: string, storeId: string): Promise<any> {
+  const token = this.getToken();
+  if (!token || !merchantId || !storeId) throw new Error('Sign in and select a store on the dashboard first.');
+  const res = await CapacitorHttp.request({ method: 'GET',
+    url: this.merchantApiUrl + '/merchants/' + encodeURIComponent(merchantId) + '/stores/' + encodeURIComponent(storeId) + '/catalog/product-options',
+    headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' } });
+  let body: any;
+  try { body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data; }
+  catch { throw new Error('Product options API returned an unexpected response (HTTP ' + res.status + ').'); }
+  if (res.status < 200 || res.status >= 300 || body?.success !== true ||
+      !['categories', 'tags', 'tax_classes', 'attributes'].every(key => Array.isArray(body?.[key]))) {
+    throw new Error(body?.message || 'Unable to load product options.');
+  }
+  return body;
+}
+
+async getPchProductTaxClasses(): Promise<any[]> {
+  let storeId = '';
+  try { storeId = JSON.parse(localStorage.getItem('selected_store') || 'null')?.id || ''; } catch {}
+  if (!storeId || !this.getToken()) throw new Error('Select a store first.');
+  const res = await CapacitorHttp.request({ method: 'GET',
+    url: this.merchantApiUrl + '/store/store-pos-configuration/' + encodeURIComponent(storeId) + '/currency_taxes/value',
+    headers: { Authorization: 'Bearer ' + this.getToken(), Accept: 'application/json' } });
+  const body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+  if (res.status < 200 || res.status >= 300 || !Array.isArray(body?.taxClasses)) throw new Error(body?.message || 'Unable to load product tax classes.');
+  return body.taxClasses.map((tax: any) => ({ name: tax.name, slug: tax.slug || 'standard', percentage: tax.rate ?? 0 }));
+}
+
+async createPchProduct(product: any, image?: File | null, nativePath?: string | null): Promise<any> {
+  return this.requestPchProduct('POST', product, image, nativePath);
+}
+
+async updatePchProduct(productId: number, product: any, image?: File | null, nativePath?: string | null): Promise<any> {
+  if (!Number.isSafeInteger(productId) || productId <= 0) throw new Error('Invalid product ID.');
+  return this.requestPchProduct('PUT', product, image, nativePath, productId);
+}
+
+private async requestPchProduct(method: 'POST' | 'PUT', product: any, image?: File | null, nativePath?: string | null, productId?: number): Promise<any> {
+  const token = this.getToken();
+  let merchantId = '', storeId = '';
+  try {
+    merchantId = JSON.parse(localStorage.getItem('merchant_data') || 'null')?.id || '';
+    storeId = JSON.parse(localStorage.getItem('selected_store') || 'null')?.id || '';
+  } catch {}
+  if (!token || !merchantId || !storeId) throw new Error('Sign in and select a store on the dashboard first.');
+  const url = this.merchantApiUrl + '/merchants/' + encodeURIComponent(merchantId) + '/stores/' + encodeURIComponent(storeId) + '/catalog/products' + (productId ? '/' + productId : '');
+  let status: number, body: any;
+  if (!image && !nativePath) {
+    const res = await CapacitorHttp.request({ method, url,
+      headers: { Authorization: 'Bearer ' + token, Accept: 'application/json', 'Content-Type': 'application/json' },
+      data: product, readTimeout: 180000 });
+    status = res.status; body = res.data;
+  } else if (Capacitor.isNativePlatform()) {
+    const boundary = 'PchProduct' + Date.now();
+    const entries: any[] = [{ key: 'product', type: 'string', value: JSON.stringify(product) }];
+    if (nativePath) {
+      const file = await Filesystem.readFile({ path: nativePath });
+      if (typeof file.data !== 'string') throw new Error('Unable to read selected image.');
+      const extension = nativePath.split('?')[0].split('.').pop()?.toLowerCase();
+      const contentType = extension === 'png' ? 'image/png' : extension === 'webp' ? 'image/webp' : 'image/jpeg';
+      entries.push({ key: 'image', type: 'base64File', value: file.data, fileName: 'product.' + (extension === 'png' || extension === 'webp' ? extension : 'jpg'), contentType });
+    } else if (image) {
+      const value = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]);
+        reader.onerror = () => reject(new Error('Unable to read selected image.')); reader.readAsDataURL(image);
+      });
+      entries.push({ key: 'image', type: 'base64File', value, fileName: image.name, contentType: image.type });
+    }
+    const res = await CapacitorHttp.request({ method, url,
+      headers: { Authorization: 'Bearer ' + token, Accept: 'application/json', 'Content-Type': 'multipart/form-data; boundary=' + boundary },
+      data: entries, dataType: 'formData', readTimeout: 180000 });
+    status = res.status; body = res.data;
+  } else {
+    const form = new FormData(); form.append('product', JSON.stringify(product));
+    if (image) form.append('image', image, image.name);
+    const res = await fetch(url, { method, headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' }, body: form });
+    status = res.status; body = await res.text();
+  }
+  try { if (typeof body === 'string') body = JSON.parse(body); }
+  catch { throw new Error('Product API returned an unexpected response (HTTP ' + status + '). Check the products list before retrying.'); }
+  if (status < 200 || status >= 300 || (body?.success !== true && !body?.variation_errors?.length) || !body?.data?.id) {
+    throw new Error(Array.isArray(body?.message) ? body.message.join(', ') : (body?.message || 'Unable to save product.'));
+  }
+  return body;
+}
+
 async createProduct(product: any) {
 
   const token = localStorage.getItem('wc_token');
@@ -664,6 +750,27 @@ async updateProduct(id: number, product: any) {
 }
 
 async deleteProduct(id: number) {
+  if (this.isMerchantSession()) {
+    const token = this.getToken();
+    let merchantId = '', storeId = '';
+    try {
+      merchantId = JSON.parse(localStorage.getItem('merchant_data') || 'null')?.id || '';
+      storeId = JSON.parse(localStorage.getItem('selected_store') || 'null')?.id || '';
+    } catch {}
+    if (!token || !merchantId || !storeId) throw new Error('Sign in and select a store first.');
+    if (!Number.isSafeInteger(id) || id <= 0) throw new Error('Invalid product ID.');
+    const res = await CapacitorHttp.request({ method: 'DELETE',
+      url: this.merchantApiUrl + '/merchants/' + encodeURIComponent(merchantId) + '/stores/' + encodeURIComponent(storeId) + '/catalog/products/' + id,
+      headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' }, readTimeout: 180000 });
+    let body: any;
+    try { body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data; }
+    catch { throw new Error('Delete API returned an unexpected response (HTTP ' + res.status + '). Check the products list before retrying.'); }
+    if (res.status < 200 || res.status >= 300 || body?.success !== true) {
+      throw new Error(Array.isArray(body?.message) ? body.message.join(', ') : (body?.message || 'Unable to delete product.'));
+    }
+    return body;
+  }
+
 
   const token = localStorage.getItem('wc_token');
 
@@ -1433,142 +1540,225 @@ async getUserById(id: number): Promise<any> {
 }
 
 // Coupons
-private async requestPchCoupon(method: 'GET' | 'PUT' | 'DELETE', id: string | number, data?: any): Promise<any> {
-  const token = this.getToken();
-  let merchantId = '', storeId = '';
-  try {
-    merchantId = JSON.parse(localStorage.getItem('merchant_data') || 'null')?.id || '';
-    storeId = JSON.parse(localStorage.getItem('selected_store') || 'null')?.id || '';
-  } catch {}
-  if (!token || !merchantId || !storeId || !id) throw new Error('Sign in and select a valid coupon and store first.');
-  let payload: any;
-  if (method === 'PUT') {
-    payload = { merchantId, storeId };
-    const fields = ['code', 'amount', 'discountType', 'description', 'dateExpires', 'individualUse',
-      'productIds', 'excludedProductIds', 'usageLimit', 'usageLimitPerUser', 'limitUsageToXItems',
-      'freeShipping', 'productCategories', 'excludedProductCategories', 'excludeSaleItems',
-      'minimumAmount', 'maximumAmount', 'emailRestrictions', 'requiredProductIds'];
-    fields.forEach(key => { if (data?.[key] !== undefined) payload[key] = data[key]; });
-  }
-  const res = await CapacitorHttp.request({
-    method, url: this.merchantApiUrl + '/coupons/' + encodeURIComponent(String(id)),
-    headers: { Authorization: 'Bearer ' + token, Accept: 'application/json', 'Content-Type': 'application/json' },
-    ...(payload ? { data: payload } : {})
-  });
-  let body: any;
-  try { body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data; }
-  catch { throw new Error('Coupon API returned an unexpected response (HTTP ' + res.status + '). Please check the API server.'); }
-  if (res.status < 200 || res.status >= 300 || body?.success !== true || !body?.coupon?.id) {
-    throw new Error(Array.isArray(body?.message) ? body.message.join(', ') : (body?.message || 'Unable to load, update or delete coupon.'));
-  }
-  return body;
-}
+// async getCouponById(id: number) {
+//   const res = await CapacitorHttp.request({
+//     method: 'GET',
+//     url: `${this.wpBase}/wp-json/wc/v3/coupons/${id}`,
+//     headers: this.getAuthHeaders()
+//   });
 
+//   return res.data;
+// }
+
+// Coupons
 async createCoupon(data: any) {
-  if (this.isMerchantSession()) {
-    const token = this.getToken();
-    let merchantId = '', storeId = '';
-    try {
-      merchantId = JSON.parse(localStorage.getItem('merchant_data') || 'null')?.id || '';
-      storeId = JSON.parse(localStorage.getItem('selected_store') || 'null')?.id || '';
-    } catch {}
-    if (!token || !merchantId || !storeId) throw new Error('Sign in and select a store on the dashboard first.');
-    const fields = ['code', 'amount', 'discountType', 'description', 'dateExpires', 'individualUse',
-      'productIds', 'excludedProductIds', 'usageLimit', 'usageLimitPerUser', 'limitUsageToXItems',
-      'freeShipping', 'productCategories', 'excludedProductCategories', 'excludeSaleItems',
-      'minimumAmount', 'maximumAmount', 'emailRestrictions', 'requiredProductIds'];
-    const payload: any = { merchantId, storeId };
-    fields.forEach(key => { if (data[key] !== undefined) payload[key] = data[key]; });
-    const res = await CapacitorHttp.request({
-      method: 'POST', url: this.merchantApiUrl + '/coupons',
-      headers: { Authorization: 'Bearer ' + token, Accept: 'application/json', 'Content-Type': 'application/json' },
-      data: payload
-    });
-    let body: any;
-    try { body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data; }
-    catch { throw new Error('Coupon API returned an unexpected response (HTTP ' + res.status + '). Please check the API server.'); }
-    if (res.status < 200 || res.status >= 300 || body?.success !== true || !body?.coupon?.id) {
-      throw new Error(Array.isArray(body?.message) ? body.message.join(', ') : (body?.message || 'Unable to create coupon.'));
+  const token = this.getToken();
+  if (!token) throw new Error('Please sign in to create coupons.');
+ 
+  let merchantId = data?.merchantId;
+  let storeId = data?.storeId;
+  try {
+    if (!merchantId) {
+      merchantId = JSON.parse(localStorage.getItem('merchant_data') || 'null')?.id;
     }
-    return body;
+    if (!storeId) {
+      storeId = JSON.parse(localStorage.getItem('selected_store') || 'null')?.id;
+    }
+  } catch {}
+ 
+  const payload: any = {
+    ...(merchantId ? { merchantId } : {}),
+    ...(storeId ? { storeId } : {}),
+    code: data.code,
+    amount: String(data.amount ?? ''),
+    discountType: data.discountType || data.discount_type || data.type || 'percent',
+    description: data.description || '',
+    individualUse: data.individualUse ?? data.individual_use ?? false,
+    freeShipping: data.freeShipping ?? data.free_shipping ?? false
+  };
+ 
+  const usageLimitVal = data.usageLimit != null ? data.usageLimit : data.usage_limit;
+  if (usageLimitVal !== null && usageLimitVal !== undefined && usageLimitVal !== '') {
+    payload.usageLimit = Number(usageLimitVal);
+    payload.usage_limit = Number(usageLimitVal);
   }
-
-
+ 
+  const usageLimitPerUserVal = data.usageLimitPerUser != null ? data.usageLimitPerUser : data.usage_limit_per_user;
+  if (usageLimitPerUserVal !== null && usageLimitPerUserVal !== undefined && usageLimitPerUserVal !== '') {
+    payload.usageLimitPerUser = Number(usageLimitPerUserVal);
+    payload.usage_limit_per_user = Number(usageLimitPerUserVal);
+  }
+ 
+  const minVal = data.minimumAmount != null ? data.minimumAmount : (data.minimum_amount != null ? data.minimum_amount : data.minAmount);
+  if (minVal !== null && minVal !== undefined && minVal !== '') {
+    payload.minimumAmount = String(minVal);
+    payload.minimum_amount = String(minVal);
+  }
+ 
+  const maxVal = data.maximumAmount != null ? data.maximumAmount : (data.maximum_amount != null ? data.maximum_amount : data.maxAmount);
+  if (maxVal !== null && maxVal !== undefined && maxVal !== '') {
+    payload.maximumAmount = String(maxVal);
+    payload.maximum_amount = String(maxVal);
+  }
+ 
+  const expiryVal = data.dateExpires || data.date_expires || data.expireDate || data.expiry_date;
+  if (expiryVal) {
+    payload.dateExpires = expiryVal;
+    payload.date_expires = expiryVal;
+    payload.expiry_date = expiryVal;
+  }
+ 
+  const excludeSaleVal = data.excludeSaleItems != null ? data.excludeSaleItems : (data.exclude_sale_items != null ? data.exclude_sale_items : data.excludeSale);
+  if (excludeSaleVal != null) {
+    payload.excludeSaleItems = !!excludeSaleVal;
+    payload.exclude_sale_items = !!excludeSaleVal;
+  }
+ 
   const res = await CapacitorHttp.request({
     method: 'POST',
-    url: `${this.wpBase}/wp-json/pinaka-pos/v1/coupons/create`,
+    url: `${this.merchantApiUrl}/coupons`,
     headers: {
-      ...this.getAuthHeaders(),
+      Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
-      'Accept': 'application/json'
+      Accept: 'application/json'
     },
-    data: JSON.stringify(data)   // ✅ IMPORTANT
+    data: payload
   });
-
-  return typeof res.data === 'string'
-    ? JSON.parse(res.data)
-    : res.data;
+ 
+  const resData = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+  if (res.status < 200 || res.status >= 300 || (resData && resData.success === false)) {
+    throw new Error(resData?.message || 'Failed to create coupon');
+  }
+  return resData;
 }
-
-
-
-
+ 
 async getCouponById(id: string | number) {
-  if (this.isMerchantSession()) return this.requestPchCoupon('GET', id);
-
-  const token = localStorage.getItem('wc_token');
-
+  const token = this.getToken();
   const res = await CapacitorHttp.request({
     method: 'GET',
-    url: `${this.wpBase}/wp-json/pinaka-pos/v1/coupons/${id}`,
+    url: `${this.merchantApiUrl}/coupons/${encodeURIComponent(String(id))}`,
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: 'application/json'
     }
   });
-
-  return typeof res.data === 'string'
-    ? JSON.parse(res.data)
-    : res.data;
+ 
+  const resData = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+  if (res.status < 200 || res.status >= 300 || (resData && resData.success === false)) {
+    throw new Error(resData?.message || 'Failed to fetch coupon');
+  }
+  return resData;
 }
+ 
 async updateCoupon(id: string | number, data: any) {
-  if (this.isMerchantSession()) return this.requestPchCoupon('PUT', id, data);
-
-  const token = localStorage.getItem('wc_token');
-
+  const token = this.getToken();
+  if (!token) throw new Error('Please sign in to update coupons.');
+ 
+  const isUuid = (val: any): boolean =>
+    typeof val === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+ 
+  const targetId = isUuid(id)
+    ? id
+    : ([data?.id, data?.couponId, data?._id, data?.uuid].find(val => isUuid(val)) || id);
+ 
+  let merchantId = data?.merchantId || data?.merchant_id;
+  let storeId = data?.storeId || data?.store_id;
+  try {
+    if (!merchantId) {
+      merchantId = JSON.parse(localStorage.getItem('merchant_data') || 'null')?.id;
+    }
+    if (!storeId) {
+      storeId = JSON.parse(localStorage.getItem('selected_store') || 'null')?.id;
+    }
+  } catch {}
+ 
+  const payload: any = {
+    ...(merchantId ? { merchantId } : {}),
+    ...(storeId ? { storeId } : {}),
+    code: data.code,
+    amount: String(data.amount ?? ''),
+    discountType: data.discountType || data.discount_type || data.type || 'percent',
+    description: data.description || '',
+    individualUse: data.individualUse ?? data.individual_use ?? false,
+    freeShipping: data.freeShipping ?? data.free_shipping ?? false
+  };
+ 
+  const usageLimitVal = data.usageLimit != null ? data.usageLimit : data.usage_limit;
+  if (usageLimitVal !== null && usageLimitVal !== undefined && usageLimitVal !== '') {
+    payload.usageLimit = Number(usageLimitVal);
+    payload.usage_limit = Number(usageLimitVal);
+  }
+ 
+  const usageLimitPerUserVal = data.usageLimitPerUser != null ? data.usageLimitPerUser : data.usage_limit_per_user;
+  if (usageLimitPerUserVal !== null && usageLimitPerUserVal !== undefined && usageLimitPerUserVal !== '') {
+    payload.usageLimitPerUser = Number(usageLimitPerUserVal);
+    payload.usage_limit_per_user = Number(usageLimitPerUserVal);
+  }
+ 
+  const minVal = data.minimumAmount != null ? data.minimumAmount : (data.minimum_amount != null ? data.minimum_amount : data.minAmount);
+  if (minVal !== null && minVal !== undefined && minVal !== '') {
+    payload.minimumAmount = String(minVal);
+    payload.minimum_amount = String(minVal);
+  }
+ 
+  const maxVal = data.maximumAmount != null ? data.maximumAmount : (data.maximum_amount != null ? data.maximum_amount : data.maxAmount);
+  if (maxVal !== null && maxVal !== undefined && maxVal !== '') {
+    payload.maximumAmount = String(maxVal);
+    payload.maximum_amount = String(maxVal);
+  }
+ 
+  const expiryVal = data.dateExpires || data.date_expires || data.expireDate || data.expiry_date;
+  if (expiryVal) {
+    payload.dateExpires = expiryVal;
+    payload.date_expires = expiryVal;
+    payload.expiry_date = expiryVal;
+  }
+ 
+  const excludeSaleVal = data.excludeSaleItems != null ? data.excludeSaleItems : (data.exclude_sale_items != null ? data.exclude_sale_items : data.excludeSale);
+  if (excludeSaleVal != null) {
+    payload.excludeSaleItems = !!excludeSaleVal;
+    payload.exclude_sale_items = !!excludeSaleVal;
+  }
+ 
   const res = await CapacitorHttp.request({
     method: 'PUT',
-    url: `${this.wpBase}/wp-json/pinaka-pos/v1/coupons/${id}`,
+    url: `${this.merchantApiUrl}/coupons/${encodeURIComponent(String(targetId))}`,
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
       Accept: 'application/json'
     },
-    data: JSON.stringify(data)  // ✅ IMPORTANT
+    data: payload
   });
-
-  return typeof res.data === 'string'
-    ? JSON.parse(res.data)
-    : res.data;
+ 
+  const resData = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+  if (res.status < 200 || res.status >= 300 || (resData && resData.success === false)) {
+    throw new Error(resData?.message || 'Failed to update coupon');
+  }
+  return resData;
 }
+ 
 async deleteCoupon(id: string | number) {
-  if (this.isMerchantSession()) return this.requestPchCoupon('DELETE', id);
-
-  const token = localStorage.getItem('wc_token');
-
+  const token = this.getToken();
+  if (!token) throw new Error('Please sign in to delete coupons.');
+ 
   const res = await CapacitorHttp.request({
     method: 'DELETE',
-    url: `${this.wpBase}/wp-json/pinaka-pos/v1/coupons/${id}`,
+    url: `${this.merchantApiUrl}/coupons/${encodeURIComponent(String(id))}`,
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: 'application/json'
     }
   });
-
-  return typeof res.data === 'string'
-    ? JSON.parse(res.data)
-    : res.data;
+ 
+  const resData = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+  if (res.status < 200 || res.status >= 300 || (resData && resData.success === false)) {
+    throw new Error(resData?.message || 'Failed to delete coupon');
+  }
+  return resData;
 }
+
+
 async updatePchSettingToggle(merchantId: string, storeId: string, key: string, enabled: boolean): Promise<{ enabled: boolean; message: string }> {
   const endpoints: Record<string, { route: string; requestKey: string; responseKey: string }> = {
     enable_safes_drop: { route: 'enable-safes-drop', requestKey: 'enable_safes_drop', responseKey: 'enable_safes_drop' },
@@ -1640,7 +1830,7 @@ async getPchCashSettings(merchantId: string, storeId: string): Promise<any> {
   return data.data;
 }
 
-async getPchStoreTaxonomies(storeId: string): Promise<{ categories: any[]; tags: any[] }> {
+async getPchStoreTaxonomies(storeId: string): Promise<{ categories: any[]; tags: any[]; attributes: any[] }> {
   const token = this.getToken();
   if (!storeId || !token) throw new Error('Sign in and select a store on the dashboard first.');
   const res = await CapacitorHttp.request({
@@ -1651,7 +1841,7 @@ async getPchStoreTaxonomies(storeId: string): Promise<{ categories: any[]; tags:
   if (res.status < 200 || res.status >= 300 || data?.success !== true || !Array.isArray(data?.categories) || !Array.isArray(data?.tags)) {
     throw new Error(data?.message || 'Unable to load product categories and tags.');
   }
-  return { categories: data.categories, tags: data.tags };
+  return { categories: data.categories, tags: data.tags, attributes: Array.isArray(data.attributes) ? data.attributes : [] };
 }
 
 async getPchStoreDetails(storeId: string): Promise<any> {
@@ -1789,13 +1979,27 @@ async getPchMerchantProducts(merchantId: string, storeId: string): Promise<any[]
   if (res.status < 200 || res.status >= 300 || data?.success !== true || !Array.isArray(data?.products)) {
     throw new Error(data?.message || 'Unable to load products.');
   }
-  return data.products.map(product => {
+  const isDeletedProduct = (product: any) => {
+    const payload = product.payload || {};
+    const statuses = [product.status, payload.status].map(value => String(value || '').trim().toLowerCase());
+    const deletedFlag = (value: any) => value === true || value === 1 || value === '1' || value === 'true';
+    return statuses.some(status => ['trash', 'trashed', 'deleted'].includes(status)) ||
+      deletedFlag(product.is_deleted) || deletedFlag(product.isDeleted) || deletedFlag(payload.is_deleted) || deletedFlag(payload.isDeleted) ||
+      !!product.deleted_at || !!product.deletedAt || !!payload.deleted_at || !!payload.deletedAt;
+  };
+  const deletedIds = new Set(data.products.filter(isDeletedProduct).map(product => String(product.wordpressId ?? product.payload?.id ?? product.id)));
+  const products = data.products.filter(product => !isDeletedProduct(product) &&
+    !deletedIds.has(String(product.parent_id ?? product.payload?.parent_id ?? product.parentId ?? ''))).map(product => {
     const payload = product.payload || {};
     return {
       ...payload, ...product,
       id: product.wordpressId ?? payload.id ?? product.id,
       price: product.price ?? payload.price ?? '0',
-      images: payload.images?.length ? payload.images : product.image ? [{ src: product.image }] : [],
+      images: [ ...(Array.isArray(payload.images) ? payload.images : []),
+        ...(Array.isArray(product.images) ? product.images : []), payload.image, product.image ]
+        .map(image => typeof image === 'string' ? { src: image } : image)
+        .filter(image => typeof image?.src === 'string' && image.src.trim()),
+      parent_id: product.parent_id ?? payload.parent_id ?? product.parentId ?? 0,
       tags: product.tags?.length ? product.tags : payload.tags || [],
       stock_status: product.stock_status ?? payload.stock_status ?? '',
       regular_price: product.regular_price ?? payload.regular_price ?? product.price ?? '0',
@@ -1806,6 +2010,24 @@ async getPchMerchantProducts(merchantId: string, storeId: string): Promise<any[]
       sku: product.sku ?? payload.sku ?? ''
     };
   });
+  const byId = new Map<string, any>(products.map(product => [String(product.id), product]));
+  const children = new Map<string, any[]>();
+  for (const product of products) {
+    const parentId = String(product.parent_id || '');
+    if (!parentId || parentId === '0') continue;
+    const siblings = children.get(parentId) || [];
+    siblings.push(product); children.set(parentId, siblings);
+    const parent = byId.get(parentId);
+    if (!product.images.length && parent?.images?.length) product.images = parent.images;
+  }
+  for (const parent of products) {
+    if (parent.type !== 'variable' || parent.manage_stock === true || parent.manage_stock === 'true') continue;
+    const variations = children.get(String(parent.id)) || [];
+    if (variations.some(variation => variation.stock_status === 'instock')) parent.stock_status = 'instock';
+    else if (variations.some(variation => variation.stock_status === 'onbackorder')) parent.stock_status = 'onbackorder';
+    else if (variations.length && variations.every(variation => variation.stock_status === 'outofstock')) parent.stock_status = 'outofstock';
+  }
+  return products;
 }
 
 async getPchCoupons(merchantId: string, storeId: string): Promise<any[]> {
@@ -1826,24 +2048,57 @@ async getPchCoupons(merchantId: string, storeId: string): Promise<any[]> {
     if (res.status < 200 || res.status >= 300 || data?.success !== true || !Array.isArray(data?.coupons) || data?.total == null || !Number.isFinite(total) || total < 0) {
       throw new Error(data?.message || 'Unable to load coupons.');
     }
-    coupons.push(...data.coupons.map(coupon => ({
-      ...coupon.woocommercePayload,
-      ...coupon,
-      discount_type: coupon.discountType ?? coupon.woocommercePayload?.discount_type,
-      date_expires: coupon.dateExpires ?? coupon.woocommercePayload?.date_expires,
-      usage_count: coupon.usageCount ?? coupon.woocommercePayload?.usage_count ?? 0,
-      usage_limit: coupon.usageLimit ?? coupon.woocommercePayload?.usage_limit ?? 0,
-      individual_use: coupon.individualUse ?? coupon.woocommercePayload?.individual_use ?? false,
-      product_ids: coupon.productIds ?? [],
-      excluded_product_ids: coupon.excludedProductIds ?? [],
-      minimum_amount: coupon.minimumAmount,
-      maximum_amount: coupon.maximumAmount
-    })));
+    coupons.push(...data.coupons.map(coupon => {
+      const isUuid = (val: any): boolean =>
+        typeof val === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+      const uuid = [coupon.id, coupon.couponId, coupon._id, coupon.uuid]
+        .find(val => isUuid(val));
+      const couponId = uuid || coupon.id || coupon.couponId || coupon._id || coupon.woocommercePayload?.id;
+      const expiryDate = coupon.dateExpires ??
+        coupon.date_expires ??
+        coupon.expiryDate ??
+        coupon.expiry_date ??
+        coupon.expireDate ??
+        coupon.expire_date ??
+        coupon.expiresAt ??
+        coupon.expires_at ??
+        coupon.woocommercePayload?.date_expires ??
+        coupon.woocommercePayload?.date_expires_gmt ??
+        coupon.woocommercePayload?.expiry_date ??
+        coupon.woocommercePayload?.expiryDate ??
+        coupon.woocommercePayload?.expireDate ??
+        coupon.woocommercePayload?.expire_date ??
+        '';
+ 
+      return {
+        ...coupon.woocommercePayload,
+        ...coupon,
+        id: couponId,
+        couponId: couponId,
+        _id: couponId,
+        merchantId: coupon.merchantId || coupon.merchant_id || merchantId,
+        storeId: coupon.storeId || coupon.store_id || storeId,
+        discount_type: coupon.discountType ?? coupon.woocommercePayload?.discount_type,
+        date_expires: expiryDate,
+        dateExpires: expiryDate,
+        expireDate: expiryDate,
+        expiry_date: expiryDate,
+        usage_count: coupon.usageCount ?? coupon.woocommercePayload?.usage_count ?? 0,
+        usage_limit: coupon.usageLimit ?? coupon.usage_limit ?? coupon.woocommercePayload?.usage_limit ?? 0,
+        usage_limit_per_user: coupon.usageLimitPerUser ?? coupon.usage_limit_per_user ?? coupon.woocommercePayload?.usage_limit_per_user ?? 0,
+        individual_use: coupon.individualUse ?? coupon.individual_use ?? coupon.woocommercePayload?.individual_use ?? false,
+        product_ids: coupon.productIds ?? [],
+        excluded_product_ids: coupon.excludedProductIds ?? [],
+        minimum_amount: coupon.minimumAmount ?? coupon.minimum_amount ?? coupon.woocommercePayload?.minimum_amount ?? coupon.minAmount ?? '0',
+        maximum_amount: coupon.maximumAmount ?? coupon.maximum_amount ?? coupon.woocommercePayload?.maximum_amount ?? coupon.maxAmount ?? '0'
+      };
+    }));
     if (coupons.length >= total) return coupons;
     if (!data.coupons.length) throw new Error('Incomplete coupon response. Please try again.');
     page++;
   }
 }
+ 
 
 async getCoupons(page = 1) {
 
@@ -1949,33 +2204,60 @@ async getDiscounts(page = "1", perPage = "10", storeId?: string) {
   return res;
 }
 
-async createDiscount(data: any) {
-  const res = await CapacitorHttp.request({
-    method: 'POST',
-    url: `${this.wpBase}/wp-json/pinaka-pos/v1/custom-discount/create-discount`,
-    headers: {
-      ...this.getAuthHeaders(),
-      'Content-Type': 'application/json'
-    },
-    data
-  });
+private getMerchantDiscountContext() {
+  const token = this.getToken();
+  let merchantId = '';
+  let storeId = this.getSelectedStoreId();
+  try {
+    merchantId = JSON.parse(localStorage.getItem('merchant_data') || 'null')?.id || '';
+    storeId = JSON.parse(localStorage.getItem('selected_store') || 'null')?.id || storeId;
+  } catch {}
+  if (!token || !storeId) throw new Error('Sign in and select a store on the dashboard first.');
+  return { token, merchantId, storeId };
+}
 
+private async requestMerchantDiscount(method: 'POST' | 'PUT' | 'DELETE', data: any, type?: string, id?: string | number) {
+  const { token, merchantId, storeId } = this.getMerchantDiscountContext();
+  const baseUrl = `${this.merchantApiUrl}/stores/${encodeURIComponent(storeId)}/merchant/discounts`;
+  const url = method === 'POST' ? baseUrl : `${baseUrl}/${encodeURIComponent(String(type || 'auto'))}/${encodeURIComponent(String(id))}`;
+  const payload = method === 'DELETE' ? undefined : {
+    ...data,
+    ...(data?.date_starts ? { start_date: data.date_starts, startDate: data.date_starts } : {}),
+    ...(data?.date_expires ? { expiry_date: data.date_expires, expiryDate: data.date_expires, dateExpires: data.date_expires } : {}),
+    ...(merchantId ? { merchantId } : {}),
+    storeId
+  };
+  const res = await CapacitorHttp.request({
+    method,
+    url,
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json' },
+    ...(payload ? { data: payload } : {})
+  });
+  let body: any;
+  try { body = typeof res.data === 'string' ? JSON.parse(res.data) : res.data; }
+  catch { throw new Error(`Discount API returned an unexpected response (HTTP ${res.status}).`); }
+  if (res.status < 200 || res.status >= 300 || body?.success === false) {
+    throw new Error(Array.isArray(body?.message) ? body.message.join(', ') : (body?.message || `Unable to ${method.toLowerCase()} discount.`));
+  }
+  return body;
+}
+
+async createDiscount(data: any) {
+  if (this.isMerchantSession()) return this.requestMerchantDiscount('POST', data);
+  const res = await CapacitorHttp.request({
+    method: 'POST', url: `${this.wpBase}/wp-json/pinaka-pos/v1/custom-discount/create-discount`,
+    headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' }, data
+  });
   return res.data;
 }
 
-async updateDiscount(id: number, data: any) {
+async updateDiscount(id: string | number, data: any) {
+  if (this.isMerchantSession()) return this.requestMerchantDiscount('PUT', data, data.type, id);
   data.discount_id = id;
-
   const res = await CapacitorHttp.request({
-    method: 'POST',
-    url: `${this.wpBase}/wp-json/pinaka-pos/v1/custom-discount/update-discount/`,
-    headers: {
-      ...this.getAuthHeaders(),
-      'Content-Type': 'application/json'
-    },
-    data
+    method: 'POST', url: `${this.wpBase}/wp-json/pinaka-pos/v1/custom-discount/update-discount/`,
+    headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' }, data
   });
-
   return res.data;
 }
 
@@ -2009,6 +2291,7 @@ async searchProducts(term: string) {
 
 // Delete Discount
 async deleteDiscount(id: number, type: string, data: any = {}) {
+  if (this.isMerchantSession()) return this.requestMerchantDiscount('DELETE', data, type, id);
   const res = await CapacitorHttp.request({
     method: 'POST',
     url: `${this.wpBase}/wp-json/pinaka-pos/v1/custom-discount/delete-discount`,
@@ -2284,7 +2567,7 @@ async updateLoyaltyPoints(payload: any) {
 }
 
 
-// Vendors
+// Vendors 
 async createVendor(data: any) {
   const res = await CapacitorHttp.request({
     method: 'POST',
