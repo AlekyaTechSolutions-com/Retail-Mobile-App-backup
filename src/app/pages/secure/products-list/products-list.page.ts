@@ -17,7 +17,8 @@ export class ProductsListPage implements OnInit {
   page = 1;
   search = '';
   searchTerm: string = '';
-  stock = ''; 
+  stock = '';
+  expandedProductId: string | null = null; 
   loading = false;
   hasMore = true;
   loadError = '';
@@ -72,12 +73,12 @@ setStockFilter(value: string){
         this.catalogContext = context;
         this.catalogPromise = this.authService.getPchMerchantProducts(merchantId, storeId);
       }
-      const catalog = await this.catalogPromise;
+      const catalog = this.groupProductVariations(await this.catalogPromise);
       if (requestId !== this.requestId) return;
       const search = this.search.trim().toLowerCase();
       const filtered = catalog.filter(product => {
         if (this.stock && product.stock_status !== this.stock) return false;
-        return !search || [product.name, product.sku, product.id].some(value => String(value || '').toLowerCase().includes(search));
+        return !search || [product, ...(product.childVariations || [])].some(entry => [entry.name, entry.sku, entry.id].some(value => String(value || '').toLowerCase().includes(search)));
       }).sort((a, b) => {
         const first = Date.parse(a.date_created || '') || 0;
         const second = Date.parse(b.date_created || '') || 0;
@@ -127,6 +128,27 @@ setStockFilter(value: string){
       : event.detail.value;
 
     this.loadProducts(undefined, true);
+  }
+
+  groupProductVariations(catalog: any[]): any[] {
+    const parents = catalog.filter(product => !product.parent_id || String(product.parent_id) === '0');
+    return parents.map(parent => {
+      if (parent.type !== 'variable') return parent;
+      const children = catalog.filter(product => String(product.parent_id) === String(parent.id));
+      const order = Array.isArray(parent.variations) ? parent.variations.map((item: any) => String(item?.id ?? item)) : [];
+      children.sort((a, b) => {
+        const first = order.indexOf(String(a.id)), second = order.indexOf(String(b.id));
+        if (first >= 0 || second >= 0) return (first < 0 ? Number.MAX_SAFE_INTEGER : first) - (second < 0 ? Number.MAX_SAFE_INTEGER : second);
+        return (Number(a.menu_order) || 0) - (Number(b.menu_order) || 0) || Number(a.id) - Number(b.id);
+      });
+      const first = children[0];
+      return { ...parent, childVariations: children,
+        ...(first ? { price: first.price, regular_price: first.regular_price, sale_price: first.sale_price } : {}) };
+    });
+  }
+
+  onProductClick(product: any) {
+    this.openProductDetails(product.id);
   }
 
   trackById(_: number, item: any) {

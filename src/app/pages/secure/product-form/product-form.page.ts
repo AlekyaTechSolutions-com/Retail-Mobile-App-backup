@@ -190,11 +190,26 @@ stripHtml(html: string): string {
 
     console.log('Generated:', this.generatedCombinations);
   }
+  private existingPchVariations: any[] = [];
+  private existingProductImages: any[] = [];
+
   async loadProduct() {
     try {
       // this.isEditMode = !!this.productId;
-      const res = await this.authService.getProductById(this.productId);
-      await this.loadExistingVariations();
+      let pchVariations: any[] | null = null;
+      let res: any;
+      if (this.authService.isMerchantSession()) {
+        const merchantId = JSON.parse(localStorage.getItem('merchant_data') || 'null')?.id || '';
+        const storeId = JSON.parse(localStorage.getItem('selected_store') || 'null')?.id || '';
+        const catalog = await this.authService.getPchMerchantProducts(merchantId, storeId);
+        res = catalog.find(product => String(product.id) === String(this.productId));
+        if (!res) throw new Error('Product not found in the selected store.');
+        pchVariations = catalog.filter(product => String(product.parent_id) === String(this.productId));
+        this.existingPchVariations = pchVariations;
+      } else {
+        res = await this.authService.getProductById(this.productId);
+        await this.loadExistingVariations();
+      }
       console.log(res);
       this.product = {
         name: res.name,
@@ -217,6 +232,7 @@ stripHtml(html: string): string {
       this.stock_status = res.stock_status;
       console.log(this.stock_status);
       this.selectedTaxClassSlug = (res.tax_class ?? '').trim();
+      this.existingProductImages = (res.images || []).filter((image: any) => image?.src || image?.id);
       // Set image preview
       if (res.images && res.images.length > 0) {
         this.imagePreview = res.images[0].src;
@@ -240,8 +256,13 @@ stripHtml(html: string): string {
             }
           });
         }
-        const variations =
-          await this.authService.getProductVariations(this.productId);
+        const variations = pchVariations !== null ? pchVariations.map(variation => ({ ...variation,
+          attributes: (variation.attributes || []).map((attribute: any) => {
+            const terms = this.attributes.find((entry: any) => Number(entry.id) === Number(attribute.id))?.terms || [];
+            const term = terms.find((entry: any) => entry.slug === attribute.option || entry.name === attribute.option);
+            return { ...attribute, option: term?.name || attribute.option };
+          })
+        })) : await this.authService.getProductVariations(this.productId);
 
         this.generatedCombinations = variations.map((variation: any) =>
           variation.attributes.map((attr: any) => ({
@@ -329,12 +350,26 @@ stripHtml(html: string): string {
       }
     }
   }
+  private taxonomyLoad: Promise<any> | null = null;
+  private loadPchTaxonomy() {
+    if (!this.taxonomyLoad) {
+      let storeId = '', merchantId = '';
+      try {
+        storeId = JSON.parse(localStorage.getItem('selected_store') || 'null')?.id || '';
+        merchantId = JSON.parse(localStorage.getItem('merchant_data') || 'null')?.id || '';
+      } catch {}
+      this.taxonomyLoad = this.authService.getPchProductOptions(merchantId, storeId).catch(error => { this.taxonomyLoad = null; throw error; });
+    }
+    return this.taxonomyLoad;
+  }
   async loadCategories() {
+    if (this.authService.isMerchantSession()) { this.categories = (await this.loadPchTaxonomy()).categories; return; }
     const res = await this.authService.getCategories();
     this.categories = res;
   }
 
   async loadTags() {
+    if (this.authService.isMerchantSession()) { this.tags = (await this.loadPchTaxonomy()).tags; return; }
     const res = await this.authService.getTags();
     this.tags = res;
   }
@@ -383,6 +418,15 @@ stripHtml(html: string): string {
   //   }
   // }
   async loadAttributes(forceReload: boolean = false) {
+    if (this.authService.isMerchantSession()) {
+      if (forceReload) this.taxonomyLoad = null;
+      this.isLoadingAttributes = true;
+      try {
+        this.attributes = (await this.loadPchTaxonomy()).attributes;
+        this.attributesLoaded = true;
+      } finally { this.isLoadingAttributes = false; }
+      return;
+    }
 
     // Prevent multiple calls
     if ((this.attributesLoaded || this.isLoadingAttributes) && !forceReload) {
@@ -460,7 +504,7 @@ stripHtml(html: string): string {
         // featured: this.product.featured,
         sold_individually: this.product.sold_individually,
         reviews_allowed: this.product.reviews_allowed,
-        tax_status: this.selectedTaxClassSlug ? 'taxable' : 'none',
+        tax_status: this.getSelectedTaxClass() ? 'taxable' : 'none',
 tax_class: this.selectedTaxClassSlug || '',
         // stock_quantity: this.product.stock_quantity,
         // manage_stock: Number(this.product.stock_quantity) > 0 ? true : false
@@ -493,6 +537,11 @@ tax_class: this.selectedTaxClassSlug || '',
 
       if (this.product.tag_ids?.length) {
         payload.tags = this.product.tag_ids.map((id: number) => ({ id }));
+      }
+
+      if (this.authService.isMerchantSession()) {
+        await this.publishPchProduct(payload);
+        return;
       }
 
       // Upload image if new file selected
@@ -598,11 +647,60 @@ tax_class: this.selectedTaxClassSlug || '',
         'danger'
       );
     }
-  //   finally {
-  //   // ✅ ALWAYS reset
-  //   this.isSubmitting = false;
-  // }
+    finally { this.isSubmitting = false; }
   }
+  private async publishPchProduct(payload: any) {
+    if (this.isEdit && !this.selectedFile && !this.selectedNativeImagePath) {
+      const seen = new Set<string>();
+      const images = this.existingProductImages.map(image => {
+        const id = Number(image.id);
+        return Number.isSafeInteger(id) && id > 0 ? { id } : { src: image.src };
+      }).filter(image => {
+        const key = image.id ? 'id:' + image.id : 'src:' + image.src;
+        if ((!image.id && !image.src) || seen.has(key)) return false;
+        seen.add(key); return true;
+      });
+      if (images.length) payload.images = images;
+      else if (this.imagePreview && /^https?:\/\//.test(this.imagePreview)) payload.images = [{ src: this.imagePreview }];
+    }
+    if (payload.tax_class === 'standard') payload.tax_class = '';
+    payload.categories = (payload.categories || []).map((entry: any) => Number(entry.id));
+    payload.tags = (payload.tags || []).map((entry: any) => Number(entry.id));
+    if (!payload.categories.length) throw new Error('Select a product category.');
+    if (payload.type === 'variable') {
+      const termId = (attributeId: number, option: string) => {
+        const term = this.getTermByName(attributeId, option) || this.attributes.find((attr: any) => Number(attr.id) === Number(attributeId))?.terms?.find((entry: any) => entry.slug === option);
+        if (!term || !Number.isSafeInteger(Number(term.id)) || Number(term.id) <= 0) throw new Error('Select valid attribute terms before creating variations.');
+        return Number(term.id);
+      };
+      payload.attributes = Object.keys(this.selectedAttributes).filter(id => this.selectedAttributes[id]?.length).map(id => ({
+        id: Number(id), visible: true, variation: true,
+        term_ids: this.selectedAttributes[id].map((option: string) => termId(Number(id), option))
+      }));
+      const combinations = this.generateCombinations();
+      if (!combinations.length) throw new Error('Select attributes for the variable product.');
+      payload.variations = combinations.map((combo: any[]) => {
+        const price = this.variationPrices[this.buildVariationKey(combo)];
+        if (price === undefined || price === null || String(price).trim() === '' || !Number.isFinite(Number(price)) || Number(price) < 0) throw new Error('Enter a valid price for every variation.');
+        const existing = this.isEdit ? this.existingPchVariations.find(variation =>
+          this.buildVariationKey(variation.attributes || []) === this.buildVariationKey(combo)) : null;
+        return { ...(existing ? { id: Number(existing.id) } : {}), regular_price: String(price),
+          attributes: combo.map(attr => ({ id: attr.id, term_id: termId(attr.id, attr.option) })) };
+      });
+      delete payload.regular_price; delete payload.sale_price;
+    }
+    const result = this.isEdit
+      ? await this.authService.updatePchProduct(this.productId, payload, this.selectedFile, this.selectedNativeImagePath)
+      : await this.authService.createPchProduct(payload, this.selectedFile, this.selectedNativeImagePath);
+    const action = this.isEdit ? 'updated' : 'created';
+    const title = this.isEdit ? 'Product Updated' : 'Product Created';
+    const warning = result.variation_errors?.length
+      ? 'Product ' + action + ', but some variations failed. Review the product before retrying.'
+      : result.synced === false || result.local_saved === false
+        ? 'Product ' + action + ', but catalog sync is pending. Review the products list before retrying.' : '';
+    await this.showAlertWithCallback(warning ? title + ' With Warning' : title, warning || (this.isEdit ? 'Updated successfully' : 'Created successfully'), warning ? 'warning' : 'success', () => this.navigateToProductList());
+  }
+
   getTermByName(attrId: number, termName: string) {
     if (!this.attributes?.length) return null;
 
@@ -989,7 +1087,7 @@ tax_class: this.selectedTaxClassSlug || '',
         {
           text: 'Delete',
           role: 'destructive',
-          handler: () => this.deleteProduct(),
+          handler: () => { void this.deleteProduct(); },
         },
       ],
     });
@@ -999,6 +1097,12 @@ tax_class: this.selectedTaxClassSlug || '',
 
   
   async loadTaxClasses() {
+  if (this.authService.isMerchantSession()) {
+    try { this.taxClasses = (await this.loadPchTaxonomy()).tax_classes.map((tax: any) => ({ ...tax,
+      percentage: tax.rate == null ? null : Number(tax.rate) })); }
+    catch (error) { this.taxClasses = []; console.error('Failed to load product tax classes', error); }
+    return;
+  }
   try {
     const classesRes = await this.authService.getTaxClasses();
     const ratesRes = await this.authService.getTaxRates();
@@ -1050,25 +1154,21 @@ getSelectedTaxLabel(): string {
   );
 
   return selected
-    ? `${selected.name} (${selected.percentage}%)`
+    ? (selected.percentage == null ? selected.name : `${selected.name} (${selected.percentage}%)`)
     : '';
 }
+  isDeleting = false;
   async deleteProduct() {
+    if (this.isDeleting || this.isSubmitting) return;
+    this.isDeleting = true;
     try {
-      await this.authService.deleteProduct(this.productId);
-      await this.showAlert(
-        'Product Deleted',
-        'Product deleted successfully',
-        'success',
-        true
-      );
-    } catch (error) {
-      await this.showAlert(
-        'Delete Failed',
-        'Failed to delete product',
-        'danger'
-      );
-    }
+      const result = await this.authService.deleteProduct(this.productId);
+      const warning = result?.synced === false;
+      await this.showAlertWithCallback(warning ? 'Product Deleted With Warning' : 'Product Deleted',
+        result?.message || 'Product deleted successfully', warning ? 'warning' : 'success', () => this.navigateToProductList());
+    } catch (error: any) {
+      await this.showAlert('Delete Failed', error?.message || 'Failed to delete product', 'danger');
+    } finally { this.isDeleting = false; }
   }
 
   // Helper methods to add to the component class

@@ -26,6 +26,9 @@ export class DiscountsPage implements OnInit {
     productSearch = '';
     productSuggestions: any[] = [];
     showSuggestions = false;
+    private productSearchRequest = 0;
+    private productCatalog: any[] | null = null;
+    private productCatalogContext = '';
     selectedProductName = '';
     searchTimeout: any;
     type: string = '';
@@ -112,8 +115,18 @@ markChanged() {
           type: d.type || 'auto',
           discount_type: d.discount_type || d.discountType || 'percent',
           coupon_amount: d.coupon_amount ?? d.amount ?? 0,
-          start_date: d.start_date || d.startDate || d.date_starts || '',
-          expiry_date: d.expiry_date || d.expiryDate || d.date_expires || ''
+          start_date: this.normalizeDiscountDate(d.start_date || d.startDate || d.date_starts || d.dateStarts || ''),
+          expiry_date: this.normalizeDiscountDate(d.expiry_date || d.expiryDate || d.date_expires || d.dateExpires || d.end_date || d.endDate || ''),
+          product_id: this.normalizeProductId(d.product_id ?? d.productId ?? d.product?.id ?? d.product),
+          product_label: d.product_label ?? d.productLabel ?? d.product?.name ?? d.productName ?? '',
+          discount_product_ids: this.normalizeProductIds(
+            d.discount_product_ids ?? d.discountProductIds ?? d.discounted_product_ids ??
+            d.discountedProductIds ?? d.discount_products ?? d.discountedProducts ??
+            d.discount_product_id ?? d.discountProductId
+          ),
+          selectedProductPrice: d.selectedProductPrice ?? d.selected_product_price ?? d.product_price ?? d.productPrice ?? '',
+          selectedDiscountProductPrice: d.selectedDiscountProductPrice ?? d.selected_discount_product_price ??
+            d.discounted_product_price ?? d.discountedProductPrice ?? ''
         }));
       } else if (body?.data && typeof body.data === 'object') {
         this.grouped = body.data;
@@ -131,6 +144,27 @@ markChanged() {
     } finally {
       this.loading = false;
     }
+  }
+
+  private normalizeProductIds(value: any): number[] {
+    if (typeof value === 'string') {
+      try { value = JSON.parse(value); } catch { value = value.split(','); }
+    }
+    if (value && !Array.isArray(value)) value = [value];
+    if (!Array.isArray(value)) return [];
+    return value.map((item: any) => Number(typeof item === 'object' ? item.id ?? item.product_id : item))
+      .filter((id: number) => Number.isFinite(id) && id > 0);
+  }
+
+  private normalizeProductId(value: any): number | string {
+    const id = typeof value === 'object' && value !== null ? value.id ?? value.product_id : value;
+    return id ?? '';
+  }
+
+  private normalizeDiscountDate(value: any): string {
+    if (!value) return '';
+    const date = String(value);
+    return /^\d{4}-\d{2}-\d{2}$/.test(date) ? `${date}T12:00:00` : date;
   }
  
   onDiscountTypeChange(event: any) {
@@ -198,10 +232,21 @@ markChanged() {
   this.emojiError = false;
  
   clearTimeout(this.searchTimeout);
+  this.productSearchRequest++;
+  if (value !== this.selectedProductName) {
+    this.form.product_id = '';
+    this.form.product_label = null;
+    this.form.selectedProductPrice = '';
+    this.selectedProductName = '';
+  }
  
   if (!value) {
     this.showSuggestions = false;
     this.productSuggestions = [];
+    this.form.product_id = '';
+    this.selectedProductName = '';
+    this.form.product_label = null;
+    this.form.selectedProductPrice = '';
     return;
   }
  
@@ -211,22 +256,51 @@ markChanged() {
 }
  
   async fetchProducts(query: string) {
+    const requestId = ++this.productSearchRequest;
     try {
-      const res = await this.auth.searchProducts(query);
- 
-      this.productSuggestions = res || [];
-      this.showSuggestions = true;
+      let products: any[];
+      if (this.auth.isMerchantSession()) {
+        let merchantId = '';
+        let storeId = '';
+        try {
+          merchantId = JSON.parse(localStorage.getItem('merchant_data') || 'null')?.id || '';
+          storeId = JSON.parse(localStorage.getItem('selected_store') || 'null')?.id || '';
+        } catch {}
+        const context = `${merchantId}:${storeId}`;
+        if (!this.productCatalog || this.productCatalogContext !== context) {
+          this.productCatalog = await this.auth.getPchMerchantProducts(merchantId, storeId);
+          this.productCatalogContext = context;
+        }
+        const term = query.trim().toLowerCase();
+        products = this.productCatalog.filter(product =>
+          [product.name, product.sku, product.id].some(value => String(value || '').toLowerCase().includes(term))
+        );
+      } else {
+        const res: any = await this.auth.searchProducts(query);
+        products = Array.isArray(res) ? res : (res?.products || res?.data?.products || []);
+      }
+      if (requestId !== this.productSearchRequest) return;
+      this.productSuggestions = products;
+      this.showSuggestions = products.length > 0;
     } catch (err) {
       console.error('Product search failed', err);
+      if (requestId === this.productSearchRequest) {
+        this.productSuggestions = [];
+        this.showSuggestions = false;
+        this.presentToast((err as any)?.message || 'Unable to search products');
+      }
     }
   }
  
   selectProduct(p: any) {
-    this.form.product_id = p.id;
-    this.selectedProductName = p.name;
-    this.form.selectedProductPrice = p.price;
-    this.productSearch = p.name;
+    this.form.product_id = p.wordpressId ?? p.id;
+    this.selectedProductName = p.name || p.payload?.name || '';
+    this.form.product_label = this.selectedProductName;
+    this.form.selectedProductPrice = String(p.price ?? p.regular_price ?? p.payload?.price ?? '0');
+    this.productSearch = this.selectedProductName;
     this.showSuggestions = false;
+    this.productSuggestions = [];
+    this.markChanged();
   }
   async onDiscountSearch(event: any) {
  
@@ -259,8 +333,28 @@ markChanged() {
     }
  
     try {
-      const res: any = await this.auth.searchProducts(term);
-      this.discountSuggestions = Array.isArray(res) ? res : [];
+      let products: any[];
+      if (this.auth.isMerchantSession()) {
+        let merchantId = '';
+        let storeId = '';
+        try {
+          merchantId = JSON.parse(localStorage.getItem('merchant_data') || 'null')?.id || '';
+          storeId = JSON.parse(localStorage.getItem('selected_store') || 'null')?.id || '';
+        } catch {}
+        const context = `${merchantId}:${storeId}`;
+        if (!this.productCatalog || this.productCatalogContext !== context) {
+          this.productCatalog = await this.auth.getPchMerchantProducts(merchantId, storeId);
+          this.productCatalogContext = context;
+        }
+        const search = term.trim().toLowerCase();
+        products = this.productCatalog.filter(product =>
+          [product.name, product.sku, product.id].some(value => String(value || '').toLowerCase().includes(search))
+        );
+      } else {
+        const res: any = await this.auth.searchProducts(term);
+        products = Array.isArray(res) ? res : (res?.products || res?.data?.products || []);
+      }
+      this.discountSuggestions = products;
     } catch (e) {
       console.error('Discount product search failed', e);
       this.discountSuggestions = [];
@@ -405,7 +499,7 @@ onDiscountCodeChange(value: string) {
         selectedProductPrice:
           coupon.selectedProductPrice,
  
-        selectedDiscountProductPrice: '',
+        selectedDiscountProductPrice: coupon.selectedDiscountProductPrice || '',
  
         type:
           coupon.type,
@@ -425,23 +519,39 @@ onDiscountCodeChange(value: string) {
       this.showSuggestions = false;
       this.productSuggestions = [];
  
-      if (coupon.product_label) {
-        this.restoreProduct(coupon.product_label);
-      } else {
-        this.productSearch = '';
-        this.selectedProductName = '';
-      }
-      if (coupon.discount_product_ids?.length) {
+      this.productSearch = coupon.product_label || '';
+      this.selectedProductName = coupon.product_label || '';
+      if (coupon.discount_product_ids?.length || (this.auth.isMerchantSession() && coupon.product_id)) {
  
         try {
- 
-          const res: any =
-            await this.auth.getProductsByIds(
-              coupon.discount_product_ids
+          if (this.auth.isMerchantSession()) {
+            let merchantId = '';
+            let storeId = '';
+            try {
+              merchantId = JSON.parse(localStorage.getItem('merchant_data') || 'null')?.id || '';
+              storeId = JSON.parse(localStorage.getItem('selected_store') || 'null')?.id || '';
+            } catch {}
+            const context = `${merchantId}:${storeId}`;
+            if (!this.productCatalog || this.productCatalogContext !== context) {
+              this.productCatalog = await this.auth.getPchMerchantProducts(merchantId, storeId);
+              this.productCatalogContext = context;
+            }
+            this.selectedDiscountProducts = this.productCatalog.filter(product =>
+              coupon.discount_product_ids.includes(Number(product.id))
             );
- 
-          this.selectedDiscountProducts =
-            res?.data || [];
+            if (!this.selectedProductName && coupon.product_id) {
+              const mainProduct = this.productCatalog.find(product => Number(product.id) === Number(coupon.product_id));
+              if (mainProduct) {
+                this.selectedProductName = mainProduct.name;
+                this.productSearch = mainProduct.name;
+                this.form.product_label = mainProduct.name;
+                this.form.selectedProductPrice = String(mainProduct.price ?? mainProduct.regular_price ?? '');
+              }
+            }
+          } else {
+            const res: any = await this.auth.getProductsByIds(coupon.discount_product_ids);
+            this.selectedDiscountProducts = res?.data || [];
+          }
  
           console.log(
             'Discount Products:',
@@ -460,14 +570,14 @@ onDiscountCodeChange(value: string) {
  
  
             // fetch full product details
-            const productDetails: any =
-              await this.auth.getProductById(
-                firstProduct.id
-              );
+            const productDetails: any = this.auth.isMerchantSession()
+              ? firstProduct
+              : await this.auth.getProductById(firstProduct.id);
  
  
             this.form.selectedDiscountProductPrice =
               String(
+                coupon.selectedDiscountProductPrice ||
                 productDetails.price ||
                 productDetails.regular_price ||
                 productDetails.sale_price ||
@@ -532,17 +642,22 @@ onDiscountCodeChange(value: string) {
         return;
       }
       let prevfilter = this.activeFilter;
-      if (this.editingCoupon) {
-        await this.auth.updateDiscount(this.editingCoupon.id, this.form);
-      } else {
-        await this.auth.createDiscount(this.form);
-        prevfilter = 'all';
+      const isEditing = !!this.editingCoupon;
+      try {
+        if (this.editingCoupon) {
+          await this.auth.updateDiscount(this.editingCoupon.id, this.form);
+        } else {
+          await this.auth.createDiscount(this.form);
+          prevfilter = 'all';
+        }
+        this.showForm = false;
+        this.resetForm();
+        await this.loadDiscounts();
+        this.setFilter(prevfilter);
+        this.presentToast(isEditing ? 'Discount updated successfully' : 'Discount created successfully');
+      } catch (error: any) {
+        this.presentToast(error?.message || 'Failed to save discount');
       }
-     
-      this.showForm = false;
-      this.resetForm();    
-      await this.loadDiscounts();
-      this.setFilter(prevfilter);
     }
     isFormValid(): boolean {
       const f = this.form;
@@ -742,19 +857,15 @@ onDiscountCodeChange(value: string) {
         text: 'Delete',
         role: 'destructive',
         handler: async () => {
- 
-          await this.auth.deleteDiscount(coupon.id, coupon.type);
- 
-          // close modal AFTER delete
-          this.showForm = false;
- 
-          // reset form
-          this.resetForm();
- 
-          // reload discounts
-          await this.loadDiscounts();
- 
-          this.presentToast('Discount deleted successfully');
+          try {
+            await this.auth.deleteDiscount(coupon.id, coupon.type);
+            this.showForm = false;
+            this.resetForm();
+            await this.loadDiscounts();
+            this.presentToast('Discount deleted successfully');
+          } catch (error: any) {
+            this.presentToast(error?.message || 'Failed to delete discount');
+          }
         }
       }
     ]

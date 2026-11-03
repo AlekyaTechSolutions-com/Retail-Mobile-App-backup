@@ -90,7 +90,8 @@
   <!-- Product Card -->
   <div
     class="product-card"
-    *ngFor="let product of products; trackBy: trackById" (click)="openProductDetails(product.id)"
+    *ngFor="let product of products; trackBy: trackById" (click)="onProductClick(product)" role="button" tabindex="0"
+    (keydown.enter)="onProductClick(product)"
   >
 
     <div class="product-top">

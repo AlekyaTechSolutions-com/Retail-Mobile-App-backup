@@ -182,7 +182,7 @@
           *ngFor="let tax of taxClasses"
           [value]="tax.slug"
         >
-          {{ tax.name }} ({{ tax.percentage }}%)
+          {{ tax.name }}<ng-container *ngIf="tax.percentage != null"> ({{ tax.percentage }}%)</ng-container>
         </ion-select-option>
       </ion-select>
     </ion-item>
@@ -489,7 +489,7 @@
     expand="block"
     class="save-btn"
     (click)="publishProduct()"
-    [disabled]="isSubmitting || hasTitleEmoji || !isDirty">
+    [disabled]="isDeleting || isSubmitting || hasTitleEmoji || !isDirty">
     {{ isSubmitting ? 'Please wait...' : (isEdit ? 'Save Changes' : 'Publish') }}
   </ion-button>
 
@@ -500,9 +500,10 @@
     fill="outline"  
     color="danger"
     class="delete-btn"
-    (click)="confirmDelete()"
+    [attr.aria-busy]="isDeleting" [disabled]="isDeleting || isSubmitting" (click)="confirmDelete()"
   >
-    Delete Product
+    <ion-spinner *ngIf="isDeleting" name="crescent" slot="start" aria-hidden="true"></ion-spinner>
+    {{ isDeleting ? 'Deleting...' : 'Delete Product' }}
   </ion-button>
 
   <!-- Scanner Overlay -->
